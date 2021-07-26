@@ -1,0 +1,2436 @@
+---
+title: "COMP4030-Cwk-20298647"
+author: "20298647   Zhida Tian"
+classoption: twoside
+output:
+  pdf_document:
+    toc: no
+    toc_depth: 3
+    fig_caption: yes
+    number_sections: no
+  html_notebook:
+    toc: yes
+    toc_depth: 2
+    toc_float:
+      collapsed: no
+      smooth_scroll: no
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+  word_document:
+    toc: no
+    toc_depth: '2'
+fontsize: 11pt
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{fancyhdr}
+- \pagestyle{fancy}
+- \fancyhead[CE,CO]{}
+- \fancyhead[LE,LO]{\textit{COMP4030-Cwk-20298647}}
+- \fancyhead[RE,RO]{\nouppercase{\textit{\leftmark}}}
+- \usepackage{xcolor}
+- \usepackage{framed}
+- \colorlet{shadecolor}{gray!10}
+- \setlength{\headheight}{15pt}
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(fig.align = 'center', out.width = '50%', fig.pos = 'H', message=FALSE, warning = FALSE)
+```
+
+
+```{r include=FALSE}
+library(dplyr) 
+library(kableExtra) 
+library(knitr) 
+library(cluster.datasets) 
+library(cluster) 
+library(e1071) 
+library(fpc)
+library(clv) 
+library(gridExtra) 
+library(ggplot2)
+library(ggrepel)
+```
+```{r include = FALSE}
+res = read.csv("cw_data.csv", header = TRUE, stringsAsFactors = FALSE)
+str(res)
+head(res, 10)
+```
+
+
+# ANALYSIS AND PRE-PROCESSING
+
+## 1.i
+```{r echo = FALSE, results='asis' }
+nominal = c("objid", "rerun", "run", "native", "field", "specobjid", "plate", "fiberid")
+interval = c("mjd")
+ratio = c("dia", "ra", "dec", "u", "g", "r", "i", "z", "m_unt", "flux", "redshift")
+ordinal = c("camcol")
+
+res_nominal = select(res, nominal)
+res_interval = select(res, interval)
+res_ratio = select(res, ratio)
+res_ordinal = select(res, ordinal)
+
+Mode = function(x){
+    ta = table(x)
+    tam = max(ta)
+    if (all(ta == tam))
+          mod = NA
+    else
+        if(is.numeric(x))
+            mod = as.numeric(names(ta)[ta == tam])
+    else
+        mod = names(ta)[ta == tam]
+    return(mod)
+}
+
+mode = function(data){
+  freq_table = table(data) # get the frequency table
+  maximum = freq_table[which.max(freq_table)] # find which one is the most
+  result = row.names(as.data.frame(maximum)) # coerce the data type of maxi to dataframe and then get the row name which is the result we want
+  return(result)
+}
+
+attri = data.frame(Features = colnames(res))
+mode = data.frame(Mode = sapply(cbind(res_nominal, res_ratio), mode))
+missing = data.frame(Missing = sapply(res, function(x)
+  {
+      sum(is.na(x))
+  }))
+mean = data.frame(Mean = sapply(cbind(res_interval, res_ratio), mean, na.rm = TRUE))
+median = data.frame(Median = sapply(cbind(res_ordinal, res_ratio), median, na.rm = TRUE))
+sd = data.frame(SD = sapply(cbind(res_interval, res_ratio), sd, na.rm = TRUE))
+iqr = data.frame(IQR = sapply(cbind(res_interval, res_ratio), IQR, na.rm = TRUE))
+range = data.frame(Range = sapply(cbind(res_interval, res_ratio), function(x){
+  max(x, na.rm = TRUE)-min(x, na.rm = TRUE)
+}))
+
+mode = bind_rows(mode, data.frame(Mode = rep(NA, length(interval)+length(ordinal)), row.names = c(interval, ordinal)))
+mean = bind_rows(mean, data.frame(Mean = rep(NA, length(nominal)+length(ordinal)), row.names = c(nominal, ordinal)))
+median = bind_rows(median, data.frame(Median = rep(NA, length(nominal)+length(interval)), row.names = c(nominal, interval)))
+sd = bind_rows(sd, data.frame(SD = rep(NA, length(nominal)+length(ordinal)), row.names = c(nominal, ordinal)))
+iqr = bind_rows(iqr, data.frame(IQR = rep(NA, length(nominal)+length(ordinal)), row.names = c(nominal, ordinal)))
+range = bind_rows(range, data.frame(Range = rep(NA, length(nominal)+length(ordinal)), row.names = c(nominal, ordinal)))
+
+mode$Features = rownames(mode)
+mean$Features = rownames(mean)
+median$Features = rownames(median)
+sd$Features = rownames(sd)
+iqr$Features = rownames(iqr)
+range$Features = rownames(range)
+missing$Features = rownames(missing)
+
+DT = mode %>% merge(mean) %>% merge(median) %>% merge(sd) %>% merge(iqr) %>% merge(range) %>% merge(missing)
+kable(DT, caption = "centrality measure, dispersion measure and missing value of the dataset", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### ii
+```{r fig.cap ="histogram of Class", echo=FALSE}
+class_data = res[,"class"]
+class_percentages = aggregate(class_data, by = list(class_data),FUN = function(x){
+  round(length(x) * 100/length(class_data),2)
+})
+class_count = aggregate(class_data, by = list(class_data), length)
+colnames(class_percentages) = c("Class", "Percentages")
+colnames(class_count) = c("Class", "Count")
+class_agg = merge(class_percentages, class_count)
+ggplot(class_agg, aes(x = Class, y = Percentages, fill = Class, color = Class))+
+  geom_bar(stat = "identity", alpha = .6)+
+  scale_y_continuous(name = "Percentages%")+
+  geom_text_repel(aes(label = Count), force = 3)
+```
+
+The class “Galaxy” occurs the most with over 50% of the whole data set which could potentially cause overfitting. And _QSO_ only takes up only 8.47% with 850 samples. This may also make it more difficult to predict the class “QSO”, which occurs the least.
+
+### iii.
+```{r echo = FALSE}
+res_frame = data.frame(res)
+```
+
+```{r fig.cap ="dispersion of dec", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = dec, fill = class, color = class), binwidth = .5, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$dec, na.rm = TRUE), max(res_frame$dec,na.rm = TRUE),2))+
+  theme(axis.text.x = element_text(angle = 75, hjust = 1)) +
+  geom_vline(aes(xintercept = median(dec, na.rm=T)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(dec, na.rm=T)),size=1, color="black")
+```
+
+Dec is right skewed, as the majority of the data lies on the left side.
+```{r fig.cap ="dispersion of dia", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = dia, fill = class, color = class), binwidth = 17000, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$dia, na.rm = TRUE), max(res_frame$dia,na.rm = TRUE),30000))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(dia, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(dia, na.rm=TRUE)),size=1, color="black")
+```
+
+Dia: The shape of the distribution of the attribute of dia is right skewed. 
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of camcol", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = camcol, fill = class, color = class), binwidth = .5, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$camcol, na.rm = TRUE), max(res_frame$camcol,na.rm = TRUE),1))+
+  geom_vline(aes(xintercept = median(camcol, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(camcol, na.rm=TRUE)),size=1, color="black")
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of fiberid", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = fiberid, color = class, fill = class), binwidth = 10, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$fiberid, na.rm = TRUE), max(res_frame$fiberid,na.rm = TRUE),20))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(fiberid, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(fiberid, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of field", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = field, color = class, fill = class), binwidth = 10, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$field, na.rm = TRUE), max(res_frame$field, na.rm = TRUE),20))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(field, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(field, na.rm=TRUE)),size=1, color="black")
+```
+
+Field: the shape is slightly right skew as the mean is slightly greater than the median. The mean is 302 while the median is 299. 
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of flux", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = flux, color = class, fill = class), binwidth = 5, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$flux, na.rm = TRUE), max(res_frame$flux, na.rm = TRUE),10))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(flux, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(flux, na.rm=TRUE)),size=1, color="black")
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of g", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = g, color = class, fill = class), binwidth = .1, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$g, na.rm = TRUE), max(res_frame$g,na.rm = TRUE),0.2))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(g, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(g, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of i", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = i, color = class, fill = class), binwidth = .1, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$i, na.rm = TRUE), max(res_frame$i,na.rm = TRUE),0.5))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(i, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(i, na.rm=TRUE)),size=1, color="black")
+```
+
+I : The mean and median are the same integer of 16.58 and 16.56 they are not even an integer apart which implies there is no skewness within the infrared attribute.
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap = "dispersion of m-unt", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = m_unt, color = class, fill = class), binwidth = .000005, alpha = .6)+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(m_unt, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(m_unt, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of mjd", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = mjd, color = class, fill = class), binwidth = 50, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$mjd, na.rm = TRUE), max(res_frame$mjd,na.rm = TRUE),100))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(mjd, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(mjd, na.rm=TRUE)),size=1, color="black")
+```
+
+Mjd: The mean is 52944.47 bigger than the median 51997 which implies the data is right skewed. This is visually apparent in the diagram as well.
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of native", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = native, color = class, fill = class), binwidth = .01, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$native, na.rm = TRUE), max(res_frame$native,na.rm = TRUE),.5))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(native, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(native, na.rm=TRUE)),size=.5, color="black")
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of objid", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = objid, color = class, fill = class), binwidth = 1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$objid, na.rm = TRUE), max(res_frame$objid,na.rm = TRUE),1))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(objid, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(objid, na.rm=TRUE)),size=.5, color="black")
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of plate", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = plate, color = class, fill = class), binwidth = 100, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$plate, na.rm = TRUE), max(res_frame$plate,na.rm = TRUE),200))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(plate, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(plate, na.rm=TRUE)),size=.5, color="black")
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of r", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = r, color = class, fill = class), binwidth = .1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$r, na.rm = TRUE), max(res_frame$r,na.rm = TRUE),0.25))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(r, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(r, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of ra", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = ra, color = class, fill = class), binwidth = 2, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$ra, na.rm = TRUE), max(res_frame$ra,na.rm = TRUE),5))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(ra, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(ra, na.rm=TRUE)),size=.5, color="black")
+```
+
+Ra: The shape of the distribution is left skew, as the mean is smaller than the median. 
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of redshift", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = redshift, color = class, fill = class), binwidth = .1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$redshift, na.rm = TRUE), max(res_frame$redshift,na.rm = TRUE),.1))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(redshift, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(redshift, na.rm=TRUE)),size=.5, color="black")
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of rerun", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = rerun, color = class, fill = class), binwidth = 1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$rerun, na.rm = TRUE), max(res_frame$rerun,na.rm = TRUE),1))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(rerun, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(rerun, na.rm=TRUE)),size=.5, color="black")
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of run", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = run, color = class, fill = class), binwidth = 10, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$run, na.rm = TRUE), max(res_frame$run,na.rm = TRUE),20))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(run, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(run, na.rm=TRUE)),size=.5, color="black")
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of specobjid", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = specobjid, color = class, fill = class), binwidth = 50000, alpha = .6)+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(specobjid, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(specobjid, na.rm=TRUE)),size=.5, color="black")
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap ="dispersion of u", echo=FALSE}
+ggplot(res_frame)+
+  geom_histogram(aes(x = u, color = class, fill = class), binwidth = .1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$u, na.rm = TRUE), max(res_frame$u,na.rm = TRUE),.5))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(u, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(u, na.rm=TRUE)),size=.5, color="black")
+```
+
+## 2.i.
+```{r fig.cap ="correlation between r and g", echo=FALSE}
+correlation = cor(res_frame$r, res_frame$g, method ="pearson", use = "pairwise.complete.obs")
+
+ggplot(res_frame, aes(x = r, y = g))+
+  geom_point(aes(color = class), size = 1)
+```
+
+The correlation between r and g is 0.9581076, indicating a high, positive correlation between these variables. This is evident in the scatterplot.
+
+### ii.
+```{r fig.cap ="correlation between r and mjd", echo=FALSE}
+correlation = cor(res_frame$r, res_frame$mjd, method ="pearson", use = "pairwise.complete.obs")
+
+ggplot(res_frame, aes(x = r, y = mjd))+
+  geom_point(aes(color = class), size = 1)
+```
+
+The correlation between mjd and r is -0.009189361, indicating a very low, negative correlation between these variables. This is also evidenced by this scatterplot which demonstrates that these two variables do not depend on each other.
+
+### iii.
+```{r fig.cap ="scatterplot between class and z", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = z))+
+  geom_point(aes(color = class), size = 1)
+```
+
+```{r fig.cap ="scatterplot between class and u", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = u))+
+  geom_point(aes(color = class), size = 1)
+```
+
+```{r fig.cap ="scatterplot between class and redshift", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = redshift))+
+  geom_point(aes(color = class), size = 1)
+```
+
+### iv.
+The boxplots are in the Appendix.
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of redshift from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = redshift, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE,fig.cap="Boxplots of mjd from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = mjd, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of dia from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = dia, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of ra from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = ra, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of dec from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = dec, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of u from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = u, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of g from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = g, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of r from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = r, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of i from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = i, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of z from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = z, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of m-unt from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = m_unt, color = class)) +
+    geom_boxplot()
+```
+```{r include=FALSE, eval=FALSE, echo = FALSE, fig.cap="Boxplots of flux from different classes", echo=FALSE}
+ggplot(res_frame, aes(x = class, y = flux, color = class)) +
+    geom_boxplot()
+```
+
+## 3.
+I conclude that, the significant attributes are _redshift_, _g_, _r_, _i_, _z_, _mjd_, _plate_, _class_ whereas the insignificant attributes are _rerun_, _objid_, _native_, _ra_, _dia_, _flux_, _m-unt_, _g_, _dec_, _camcol_, _fiberid_, _u_, _run_, _field_.
+
+The boxplots obtained previously display that the attributes _redshift_, _g_, _r_, _i_ and _z_ help separate the class “QSO” from others. Additionally, from the scatterplot previously, I conclude that the attributes _r_ and _mjd_ have a low correlation. Moreover, the _mjd_ boxplot of the three classes shows different distributions. Similarly, the _plate_ histogram displays that the classes are more segregated for this attribute.
+
+_objid_ and _rerun_ is the least significant attribute as it is consistent throughout the data and does not provide useful information or shows strong relationships with other attributes. _native_ attribute only has two values and from the histogram we can tell that with the value of this attribute changes the possibility of indicating different classes stay the same, thus providing no novelty. _ra_, _dia_, _flux_, _dec_, _camcol_, _fiberid_, _u_, _run_, _field_ and _m-unt_ have very similar distributions among all the classes. Therefore, they don't provide much information. Attribute _r_ and _g_ are highly correlated, which means they probably provide the same information given they have a strong relationship.
+
+## 4.
+```{r include=FALSE}
+galaxy = select(filter(res_frame, class == "GALAXY"), -"class")
+star = select(filter(res_frame, class == "STAR"), -"class")
+qso = select(filter(res_frame, class == "QSO"), -"class")
+
+galaxy_mean = sapply(galaxy, mean, na.rm = TRUE)
+galaxy_median = sapply(galaxy, median, na.rm = TRUE)
+star_mean = sapply(star, mean, na.rm = TRUE)
+star_median = sapply(star, median, na.rm = TRUE)
+qso_mean = sapply(qso, mean, na.rm = TRUE)
+qso_median = sapply(qso, median, na.rm = TRUE)
+
+zero_na = res_frame
+mean_na = res_frame
+median_na = res_frame
+
+for (i in colnames(zero_na))
+  {
+  zero_na[is.na(zero_na[,i]),i]=0
+  }
+
+for (i in colnames(zero_na))
+  {
+    mean_na[is.na(mean_na[,i]) & mean_na$class == "GALAXY",i] = galaxy_mean[i]
+    median_na[is.na(median_na[,i]) & median_na$class == "GALAXY",i] = galaxy_median[i]
+  }
+  for (i in colnames(zero_na))
+  {
+    mean_na[is.na(mean_na[,i]) & mean_na$class == "QSO",i] = qso_mean[i]
+    median_na[is.na(median_na[,i]) & median_na$class == "QSO",i] = qso_median[i]
+  }
+  for (i in colnames(zero_na))
+  {
+    mean_na[is.na(mean_na[,i]) & mean_na$class == "STAR",i] = star_mean[i]
+    median_na[is.na(median_na[,i]) & median_na$class == "STAR",i] = star_median[i]
+  }
+```
+```{r fig.cap="Boxplots of original dataset", echo=FALSE, eval=FALSE}
+boxplot(select(res_frame, -class))
+```
+```{r fig.cap="Boxplots of the data set replaced by zero value", echo=FALSE}
+boxplot(select(zero_na, -class))
+```
+```{r fig.cap="Boxplots of the data set replaced by mean value", echo=FALSE}
+boxplot(select(mean_na, -class))
+```
+```{r fig.cap="Boxplots of the data set replaced by median value", echo=FALSE}
+boxplot(select(median_na, -class))
+```
+
+0 replacement prevents us from  making false predictions of the values and has the advantage of not influencing the correlation either. It does not intefer with the relationships between the values conclusively it is the optimal way to deal with missing values. 
+
+mean replacement allows predictions to be unbiased, however there is disadvantage in how estimating values like the mean affect the conclusions we draw and decreases standard deviation.
+
+Median has the similar disadvantages to the mean - of estimating values. Similar to the mean, it also provides lack of variability to our dataset. It has the advantage of eliminating noise however. 
+
+## 5.
+```{r include=FALSE}
+normalize = function(x) {
+return ((x - min(x)) / (max(x) - min(x)))
+}
+
+mean_centre_zero = data.frame(scale(select(zero_na, -"class"), scale = FALSE))
+mean_centre_mean = data.frame(scale(select(mean_na, -"class"), scale = FALSE))
+mean_centre_median = data.frame(scale(select(median_na, -"class"), scale = FALSE))
+
+normalised_zero = data.frame(sapply(select(zero_na, -"class"), normalize))
+normalised_mean = data.frame(sapply(select(mean_na, -"class"), normalize))
+normalised_median = data.frame(sapply(select(median_na, -"class"), normalize))
+
+standarised_zero = data.frame(scale(select(zero_na, -"class")))
+standarised_mean = data.frame(scale(select(mean_na, -"class")))
+standarised_median = data.frame(scale(select(median_na, -"class")))
+```
+
+```{r include=FALSE}
+mjd_mc_z = data.frame(Mjd = mean_centre_zero$mjd, Measure = "mean centre")
+mjd_n_z = data.frame(Mjd = normalised_zero$mjd, Measure = "normalised")
+mjd_s_z = data.frame(Mjd = standarised_zero$mjd, Measure = "standarised")
+mjd_zero = bind_rows(mjd_mc_z,mjd_n_z,mjd_s_z)
+
+mjd_mc_mean = data.frame(Mjd = mean_centre_mean$mjd, Measure = "mean centre")
+mjd_n_mean = data.frame(Mjd = normalised_mean$mjd, Measure = "normalised")
+mjd_s_mean = data.frame(Mjd = standarised_mean$mjd, Measure = "standarised")
+mjd_mean = bind_rows(mjd_mc_mean,mjd_n_mean,mjd_s_mean)
+
+mjd_mc_median = data.frame(Mjd = mean_centre_median$mjd, Measure = "mean centre")
+mjd_n_median = data.frame(Mjd = normalised_median$mjd, Measure = "normalised")
+mjd_s_median = data.frame(Mjd = standarised_median$mjd, Measure = "standarised")
+mjd_median = bind_rows(mjd_mc_median,mjd_n_median,mjd_s_median)
+```
+
+```{r fig.cap="Boxplots of mjd attribute in data set replaced by zero", echo=FALSE}
+ggplot(mjd_zero, color = Measure)+
+  geom_boxplot(aes(y = Mjd, x = Measure ))
+```
+```{r fig.cap="Boxplots of mjd attribute in data set replaced by mean value", echo=FALSE}
+ggplot(mjd_mean, color = Measure)+
+  geom_boxplot(aes(y = Mjd, x = Measure ))
+```
+```{r fig.cap="Boxplots of mjd attribute in data set replaced by median value", echo=FALSE}
+ggplot(mjd_median, color = Measure)+
+  geom_boxplot(aes(y = Mjd, x = Measure ))
+```
+
+The Mean centring method calculates average value of each variable and subtracts this from the dataset.
+ From the above boxplots I can conclude the mean centering method on the median and the mean are similar suggesting their averages are almost identical in their output. The number of outliers show a similar range. The zero boxplot has a slight decrease in range which indicates a wider spread of the data. 
+
+The Normalisation method scales the data .The boxplots proves an alike output to the mean centering where the zero has a smaller range than the others.
+
+The standardisation method subtracts the mean and divide by the standard deviation. 
+Each value reflects the distance away from the mean in standard deviations.In conclusion the boxplots, shows alikeness of the almost identical median and mean boxplots.
+
+Out of the three methods, standardisation maintains outliars, this is useful as outliars provide information - therefore making it the most optimal method. 
+
+## 6. i.
+```{r echo=FALSE, results='asis'}
+res_noclass = select(res_frame, -class)
+missing_percentages = data.frame(Features = colnames(res_noclass) , Percentages = sapply(res_noclass, function(x){
+  sum(is.na(x)) * 100/length(x)
+}))
+rownames(missing_percentages) = c()
+index = apply(res_noclass, 1, function(x){
+   sum(is.na(x))/length(x)<0.5
+})
+
+deleting_rows = res_frame[index,]
+
+DF1 = select(deleting_rows, -dia)
+
+#kable(missing_percentages, caption = "The percentages of different attribute's missing value", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+Attribute _dia_ has the highest missing value percentage(66.1162%), which is higher than 50%. Therefore, I decided to delete this attribute. The table contained full information about the missing value percentage within each attributes is in the Appendix.
+
+In terms of the missing values per instances, I set the threshold as 50%. And there are 50 rows which have more than 50% of the missing value.
+
+After removing those instances and attribute the data set will have 10002 samples and 21 attributes.
+
+### ii.
+```{r echo=FALSE, results='asis'}
+replace_missing = function(x){
+  galaxy = select(filter(x, class == "GALAXY"), -"class")
+  star = select(filter(x, class == "STAR"), -"class")
+  qso = select(filter(x, class == "QSO"), -"class")
+
+  galaxy_mean = sapply(galaxy, mean, na.rm = TRUE)
+  star_mean = sapply(star, mean, na.rm = TRUE)
+  qso_mean = sapply(qso, mean, na.rm = TRUE)
+
+  replace_mean = x
+
+  for (i in colnames(replace_mean))
+    {
+      replace_mean[is.na(replace_mean[,i]) & replace_mean$class == "GALAXY",i] = galaxy_mean[i]
+    }
+    for (i in colnames(replace_mean))
+    {
+      replace_mean[is.na(replace_mean[,i]) & replace_mean$class == "QSO",i] = qso_mean[i]
+    }
+    for (i in colnames(replace_mean))
+    {
+      replace_mean[is.na(replace_mean[,i]) & replace_mean$class == "STAR",i] = star_mean[i]
+    }
+  return(replace_mean)
+}
+
+replace_mean = replace_missing(res_frame)
+#sapply(select(replace_mean, -class), function(x){sum(is.na(x))})
+
+#data.frame(cor(select(replace_mean, -class), method = "pearson", use = "pairwise.complete.obs"))
+```
+```{r echo=FALSE, results='asis'}
+uncorrelated_DS = select(replace_mean, -class)
+uncorrelated_DS = select(uncorrelated_DS, c(-objid, -rerun, -g, -r, -i, -z, -ra, -specobjid, -plate, -field, -run, -dec, -camcol, -m_unt))
+correlation_mat = cor(uncorrelated_DS, method = "pearson", use = "pairwise.complete.obs")
+kable(correlation_mat, caption = "The correlation matrix of the data set been produced", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+I placed the missing value by mean values within different classes. Then generate the correlation matrix. From the table we can find that _objid_ and _rerun_ attributes have "NA" value to all other attributes. This is because there's no variation, there cannot be any co-variation, whence the covariances and the correlations are undefined. Therefore, it makes sense to delete them in the dataset.  Attributes _dia_ and _native_ show low correlation to all of the rest attributes in the data set. Attributes _u_, _g_, _r_, _i_ and _z_ are highly correlated with each other. Similarly attributes _dec_, _run_, _ra_, _m-unt_, _flux_ and _field_ have high correlations. Attributes _specobjid_, _plate_ and _mjd_ are highly correlated.
+
+## 7. i.
+For PCA, I started from the raw dataset, replace the missing values with the mean according to each class to eliminate noise. I removed objid and rerun as these two attributes have the same value and would cause errors when standardizing due to their lack of variance. 
+
+```{r echo = FALSE, include=FALSE}
+autometic_pca = function(dataset, threshold, outPutData)
+{
+  #normalize the dataset
+  t.stand = scale(dataset)
+  pca_t = prcomp(t.stand)
+  sum = summary(pca_t)
+  select =sapply(sum$importance["Cumulative Proportion",], FUN = function(x){
+    if (x<= threshold)
+    {
+      return(TRUE)
+    }
+    else{
+      return(FALSE)
+    }
+  })
+  select[select == FALSE][1] = TRUE
+  if(outPutData){
+      return(pca_t$x[,select])
+  }else{
+      return(sum$importance[,select])
+  }
+}
+```
+
+```{r echo=FALSE}
+original = replace_missing(res_frame)
+original_input = select(original, c(-class, -objid, -rerun, - objid, -specobjid, -fiberid))
+tpca = autometic_pca(original_input, 1, TRUE)
+rpca_12 = tpca[,1:12]
+```
+
+### ii.
+```{r echo=FALSE, results='asis'}
+rpca_90 = autometic_pca(original_input, 0.9, TRUE)
+rpca_90_sum = autometic_pca(original_input, 0.9, FALSE)
+kable(rpca_90_sum, caption = "The PCA obtained a cumulative variance of at least 90%", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+In order to obtain at leaast 90% of cumulative variance we will need 8 PCs.
+
+# CLUSTERING
+
+## 1.
+In this part I chose the data set from question 1.7i, the reduced PCA with 12 PCs. For the Internal metrics I used _average.between_, _average.within_ and _dunn_ criteria to evaluate the result. For external metrics: _precision_, _recall_ and _F1_. 
+
+```{r echo = FALSE, results='asis'}
+cresult = data.frame(class = res_frame$class, hca = 0, kmeans = 0, pam = 0)
+k = 3
+maximize_diag = function(matrix) {
+    if (nrow(matrix) != ncol(matrix)) stop("Not diagonal")
+    if(is.null(rownames(matrix))) rownames(matrix) <- 1:nrow(matrix)
+
+    row.max = apply(matrix,1,which.max)
+
+    return(matrix[names(sort(row.max)),])
+}
+```
+
+```{r echo = FALSE, include=FALSE}
+hc = hclust(dist(rpca_12))
+cresult$hca = cutree(hc,k)
+
+km = kmeans(rpca_12, 3)
+cresult$kmeans = km$cluster
+
+pam = pam(rpca_12, 3)
+cresult$pam = pam$cluster
+```
+
+```{r echo=FALSE, results='asis'}
+internal_matric = function(x, dataset)
+{
+  distance = dist(dataset)
+  if(ncol(x)>2)
+    {
+    all_cresult = x[,c(2:ncol(x))]
+    summ=sapply(all_cresult, FUN = function(x){cluster.stats(distance,clustering = x, silhouette = TRUE)})
+    total = as.data.frame(summ[c("average.between","average.within", "dunn"),])
+  }else{
+    all_cresult = x[,2]
+    summ=cluster.stats(distance,clustering = all_cresult, silhouette = TRUE)
+    total = as.data.frame(summ[c("average.between","average.within", "dunn")])
+  }
+  return(total)
+}
+```
+
+```{r echo = FALSE, results='asis'}
+inter_matr = internal_matric(cresult, rpca_12)
+
+kable(inter_matr, caption = "Internal metrics for clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r echo=FALSE, results='asis'}
+hca_table = table(cresult$class,cresult$hca)
+km_table = table(cresult$class,cresult$kmeans)
+pam_table = table(cresult$class,cresult$pam)
+
+hca_external  = maximize_diag(hca_table)
+km_external  = maximize_diag(km_table)
+pam_external  = maximize_diag(pam_table)
+
+#kable(hca_external, caption = "External metrics for HCA clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+#kable(km_external, caption = "External metrics for kmeans clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+#kable(pam_external, caption = "External metrics for PAM clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r echo=FALSE}
+precision = function(x)
+{
+  diag= diag(x)
+  colsums=apply(x, 2, sum)
+  precision = diag / colsums 
+  return(precision)
+}
+recall = function(x){
+  diag= diag(x)
+  rowsums = apply(x, 1, sum)
+  recall = diag / rowsums 
+  return(recall)
+}
+f1 = function(precision, recall)
+{
+  f1 = 2 * precision * recall / (precision + recall)
+  return(f1)
+}
+```
+
+```{r echo=FALSE}
+hca_precision = precision(hca_external)
+hca_recall = recall(hca_external)
+hca_f1 = f1(hca_precision, hca_recall)
+
+HCA_evaluate = data.frame(Class = names(hca_recall), Precision = hca_precision, Recall = hca_recall, F1 = hca_f1)
+
+km_precision = precision(km_external)
+km_recall = recall(km_external)
+km_f1 = f1(km_precision, km_recall)
+
+km_evaluate = data.frame(Class = names(km_recall), Precision = km_precision, Recall = km_recall, F1 = km_f1)
+
+pam_precision = precision(pam_external)
+pam_recall = recall(pam_external)
+pam_f1 = f1(pam_precision, pam_recall)
+
+pam_evaluate = data.frame(Class = names(pam_recall), Precision = pam_precision, Recall = pam_recall, F1 = pam_f1)
+```
+
+```{r echo=FALSE, results='asis'}
+kable(HCA_evaluate, caption = "External metrics for HCA clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(km_evaluate, caption = "External metrics for Kmeans clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(pam_evaluate, caption = "External metrics for PAM clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+In evaluating the internal metrics, HCA produces the largest average distance with 35.2 which means HCA separates the cluster better. HCA also produces the most desirable dunn index result with 0.45. The smallest average within is the most desirable, as we want the clusters to be more compact, which kmeans produces with 4.7 - however all average.within results produced are within 1 integer of each other. In evaluating external metrics, QSO performed consistenly poor in all areas the HCA clustering method. PAM consistently showed to score well in all areas of external metrics for all classes showing it to be the most effective clustering method in terms of external metrics. 
+
+## 2.
+For HCA, as presented in the table I changed the parameters for distance and "Meathod" for _hclust_ function.
+
+```{r echo=FALSE, results='asis'}
+# HCA
+HCA = data.frame(HCA = c("HCA1","HCA2","HCA3","HCA4"), Distance = c("manhattan", "euclidean","manhattan","euclidean"), Method = c("complete","complete","single","single"))
+cresult_HCA = data.frame(class = res_frame$class, hca1 = 0, hca2 = 0, hca3 = 0, hca4 = 0)
+hca1 = hclust(dist(rpca_12, "manhattan"), "complete")
+hca2 = hclust(dist(rpca_12, "euclidean"), "complete")
+hca3 = hclust(dist(rpca_12, "manhattan"), "single")
+hca4 = hclust(dist(rpca_12, "euclidean"), "single")
+
+cresult_HCA$hca1 = cutree(hca1,k)
+cresult_HCA$hca2 = cutree(hca2,k)
+cresult_HCA$hca3 = cutree(hca3,k)
+cresult_HCA$hca4 = cutree(hca4,k)
+
+HCA_inter_matr = internal_matric(cresult_HCA, rpca_12)
+
+hca1_table = table(cresult_HCA$class,cresult_HCA$hca1)
+hca2_table = table(cresult_HCA$class,cresult_HCA$hca2)
+hca3_table = table(cresult_HCA$class,cresult_HCA$hca3)
+hca4_table = table(cresult_HCA$class,cresult_HCA$hca4)
+
+hca1_external  = maximize_diag(hca1_table)
+hca2_external  = maximize_diag(hca2_table)
+hca3_external  = maximize_diag(hca3_table)
+hca4_external  = maximize_diag(hca4_table)
+
+hca1_precision = precision(hca1_external)
+hca2_precision = precision(hca2_external)
+hca3_precision = precision(hca3_external)
+hca4_precision = precision(hca4_external)
+
+hca1_recall = recall(hca1_external)
+hca2_recall = recall(hca2_external)
+hca3_recall = recall(hca3_external)
+hca4_recall = recall(hca4_external)
+
+hca1_f1 = f1(hca1_precision, hca1_recall)
+hca2_f1 = f1(hca2_precision, hca2_recall)
+hca3_f1 = f1(hca3_precision, hca3_recall)
+hca4_f1 = f1(hca4_precision, hca4_recall)
+
+HCA1_evaluate = data.frame(Class = names(hca1_recall), Precision = hca1_precision, Recall = hca1_recall, F1 = hca1_f1)
+HCA2_evaluate = data.frame(Class = names(hca2_recall), Precision = hca2_precision, Recall = hca2_recall, F1 = hca2_f1)
+HCA3_evaluate = data.frame(Class = names(hca3_recall), Precision = hca3_precision, Recall = hca3_recall, F1 = hca3_f1)
+HCA4_evaluate = data.frame(Class = names(hca4_recall), Precision = hca4_precision, Recall = hca4_recall, F1 = hca4_f1)
+
+kable(HCA, caption = "Combinations of parameters for HCA clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(HCA_inter_matr, caption = "Internal metrics for clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(HCA1_evaluate, caption = "External metrices for HCA1 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+#kable(HCA2_evaluate, caption = "External metrices for HCA2 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+#kable(HCA3_evaluate, caption = "External metrices for HCA3 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+#kable(HCA4_evaluate, caption = "External metrices for HCA4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+As presented in the internal metrics, the _average.between_ value is the same for HCA1 to HCA3. HCA4 generates the highest value. Therefore, it separates clusters the best. However,it has poor dunn value, which indicates it probably has higher diameter for the clusters - the clusters aren't compact. 
+
+In evaluating the external metrics the result are the same across all 4 hca methods. The precision and recall value are all 0 for QSO class, 1 for STAR and GALAXY class respectively. This indicates half of the GALAXY data are miss-calculated as QSO. Furthermore, there is almost no correct positive prediction to class QSO and STAR. Since all the result from internal and external metrics are almost the same, there is no clear conclusion of optimal performance.
+
+For K-means method, I changed _nstart_ and _Method_ parameters. 
+
+```{r echo=FALSE}
+# Kmean
+Kmean = data.frame(Kmeans = c("km1","km2","km3","km4"), nstart = c(5, 10, 5, 10), Method = c("Hartigan-Wong","Hartigan-Wong","Lloyd","Lloyd"))
+cresult_Kmeans = data.frame(class = res_frame$class, km1 = 0, km2 = 0, km3 = 0, km4 = 0)
+
+km1 = kmeans(rpca_12, 3, nstart = 5)
+km2 = kmeans(rpca_12, 3, nstart = 10)
+km3 = kmeans(rpca_12, 3, iter.max = 1000, nstart = 5, "Lloyd")
+km4 = kmeans(rpca_12, 3, iter.max = 1000, nstart = 10, "Lloyd")
+
+cresult_Kmeans$km1 = km1$cluster
+cresult_Kmeans$km2 = km2$cluster
+cresult_Kmeans$km3 = km3$cluster
+cresult_Kmeans$km4 = km4$cluster
+
+Kmeans_inter_matr = internal_matric(cresult_Kmeans, rpca_12)
+
+km1_table = table(cresult_Kmeans$class,cresult_Kmeans$km1)
+km2_table = table(cresult_Kmeans$class,cresult_Kmeans$km2)
+km3_table = table(cresult_Kmeans$class,cresult_Kmeans$km3)
+km4_table = table(cresult_Kmeans$class,cresult_Kmeans$km4)
+
+km1_external  = maximize_diag(km1_table)
+km2_external  = maximize_diag(km2_table)
+km3_external  = maximize_diag(km3_table)
+km4_external  = maximize_diag(km4_table)
+
+km1_precision = precision(km1_external)
+km2_precision = precision(km2_external)
+km3_precision = precision(km3_external)
+km4_precision = precision(km4_external)
+
+km1_recall = recall(km1_external)
+km2_recall = recall(km2_external)
+km3_recall = recall(km3_external)
+km4_recall = recall(km4_external)
+
+km1_f1 = f1(km1_precision, km1_recall)
+km2_f1 = f1(km2_precision, km2_recall)
+km3_f1 = f1(km3_precision, km3_recall)
+km4_f1 = f1(km4_precision, km4_recall)
+
+km1_evaluate = data.frame(Class = names(km1_recall), Precision = km1_precision, Recall = km1_recall, F1 = km1_f1)
+km2_evaluate = data.frame(Class = names(km2_recall), Precision = km2_precision, Recall = km2_recall, F1 = km2_f1)
+km3_evaluate = data.frame(Class = names(km3_recall), Precision = km3_precision, Recall = km3_recall, F1 = km3_f1)
+km4_evaluate = data.frame(Class = names(km4_recall), Precision = km4_precision, Recall = km4_recall, F1 = km4_f1)
+
+kable(Kmean, caption = "Combinations of parameters for kmeans clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(Kmeans_inter_matr, caption = "Internal metrics for Kmeans clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(km1_evaluate, caption = "External mectrices for km1 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(km2_evaluate, caption = "External mectrices for km2 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+#ßkable(km3_evaluate, caption = "External mectrices for km3 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+#kable(km4_evaluate, caption = "External mectrices for km4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+In the internal metrics km1, km3 and km2, km4 have almost the same value. The Higher _nstart_ parameters produce better outputs with 0.0003 increment in dunn. Evidently all the dunn values are close to 0, showing worst clustering results.
+
+There are no significant differences between the four k-means method. GALAXY class has a stable result in terms of all three criteria, while the results for class QSO and STAR varies with the change in "Method" parameter. In general km1 and km4 may have 
+relatively higher F1 values. But It still proves to not be a successful indicator of predicting QSO class.
+
+For PAM, I changed the  parameters of distance metric and Pamonce as displayed in the table below. 
+
+```{r echo=FALSE, results='asis'}
+
+PAM = data.frame(PAM = c("pam1","pam2","pam3","pam4"), Metric = c("manhattan", "manhattan", "euclidean", "euclidean"), Pamonce = c(3,6,3,6))
+
+cresult_PAM = data.frame(class = res_frame$class, pam1 = 0, pam2 = 0, pam3 = 0, pam4 = 0)
+
+pam1 = pam(rpca_12, 3, metric = "manhattan", pamonce = 3)
+pam2 = pam(rpca_12, 3, metric = "manhattan", pamonce = 6)
+pam3 = pam(rpca_12, 3, metric = "euclidean", pamonce = 3)
+pam4 = pam(rpca_12, 3, metric = "euclidean", pamonce = 6)
+
+cresult_PAM$pam1 = pam1$cluster
+cresult_PAM$pam2 = pam2$cluster
+cresult_PAM$pam3 = pam3$cluster
+cresult_PAM$pam4 = pam4$cluster
+
+PAM_inter_matr = internal_matric(cresult_PAM, rpca_12)
+
+pam1_table = table(cresult_PAM$class,cresult_PAM$pam1)
+pam2_table = table(cresult_PAM$class,cresult_PAM$pam2)
+pam3_table = table(cresult_PAM$class,cresult_PAM$pam3)
+pam4_table = table(cresult_PAM$class,cresult_PAM$pam4)
+
+pam1_external  = maximize_diag(pam1_table)
+pam2_external  = maximize_diag(pam2_table)
+pam3_external  = maximize_diag(pam3_table)
+pam4_external  = maximize_diag(pam4_table)
+
+pam1_precision = precision(pam1_external)
+pam2_precision = precision(pam2_external)
+pam3_precision = precision(pam3_external)
+pam4_precision = precision(pam4_external)
+
+pam1_recall = recall(pam1_external)
+pam2_recall = recall(pam2_external)
+pam3_recall = recall(pam3_external)
+pam4_recall = recall(pam4_external)
+
+pam1_f1 = f1(pam1_precision, pam1_recall)
+pam2_f1 = f1(pam2_precision, pam2_recall)
+pam3_f1 = f1(pam3_precision, pam3_recall)
+pam4_f1 = f1(pam4_precision, pam4_recall)
+
+pam1_evaluate = data.frame(Class = names(pam1_recall), Precision = pam1_precision, Recall = pam1_recall, F1 = pam1_f1)
+pam2_evaluate = data.frame(Class = names(pam2_recall), Precision = pam2_precision, Recall = pam2_recall, F1 = pam2_f1)
+pam3_evaluate = data.frame(Class = names(pam3_recall), Precision = pam3_precision, Recall = pam3_recall, F1 = pam3_f1)
+pam4_evaluate = data.frame(Class = names(pam4_recall), Precision = pam4_precision, Recall = pam4_recall, F1 = pam4_f1)
+
+kable(PAM, caption = "Combinations of parameters for pam clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(PAM_inter_matr, caption = "Internal metrics for PAM clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(pam1_evaluate, caption = "External mectrices for pam1 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(pam2_evaluate, caption = "External mectrices for pam2 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+#kable(pam3_evaluate, caption = "External mectrices for pam3 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(pam4_evaluate, caption = "External mectrices for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+For the Internal metrics for PAM, we can tell that pam1, pam2 and pam3, pam4 share the same value in average.between and average.within. Pam3 and pam4 show better seperation and compactness with 1 and 0.1 differences respectively. The dunn value is also higher in pam3 and pam4. But conclusively it is low as it's very close to 0.
+
+In the external metrics, pam3 and pam4 have the exact same value. They both show relatively higher value in precision, recall and F1 compared with pam1 and pam2's value.
+
+Conclusively, pam3 and pam4 produced better clustering result among all the experiments mentioned above.
+
+## 3.
+I choosed Pam clustering method with euclidean distance function and 6 for attribute _pamonce_.
+
+### i.
+```{r echo=FALSE, message=FALSE, results='asis'}
+tpca_result = data.frame(class = res_frame$class, pam = 0)
+tpca_pam = pam(tpca, 3, metric = "euclidean", pamonce = 6)
+tpca_result$pam = tpca_pam$cluster
+tpca_inter_matr = internal_matric(tpca_result, tpca)
+
+tpca_table = table(tpca_result$class,tpca_result$pam)
+tpca_external  = maximize_diag(tpca_table)
+tpca_precision = precision(tpca_external)
+tpca_recall = recall(tpca_external)
+tpca_f1 = f1(tpca_precision, tpca_recall)
+tpca_evaluate = data.frame(Class = names(tpca_recall), Precision = tpca_precision, Recall = tpca_recall, F1 = tpca_f1)
+
+kable(tpca_inter_matr, caption = "Internal metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(tpca_evaluate, caption = "External metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### ii.
+```{r echo=FALSE, message=FALSE, results='asis'}
+rpca12_result = data.frame(class = res_frame$class, pam = 0)
+rpca12_pam = pam(rpca_12, 3, metric = "euclidean", pamonce = 6)
+rpca12_result$pam = rpca12_pam$cluster
+rpca12_inter_matr = internal_matric(rpca12_result, rpca_12)
+
+rpca12_table = table(rpca12_result$class,rpca12_result$pam)
+rpca12_external  = maximize_diag(rpca12_table)
+rpca12_precision = precision(rpca12_external)
+rpca12_recall = recall(rpca12_external)
+rpca12_f1 = f1(rpca12_precision, rpca12_recall)
+rpca12_evaluate = data.frame(Class = names(rpca12_recall), Precision = rpca12_precision, Recall = rpca12_recall, F1 = rpca12_f1)
+
+kable(rpca12_inter_matr, caption = "Internal metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(rpca12_evaluate, caption = "External metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### iii.
+```{r echo=FALSE, warning = FALSE, message=FALSE, results='asis'}
+reduced_result = data.frame(class = res_frame$class, pam = 0)
+reduced_pam = pam(uncorrelated_DS, 3, metric = "euclidean", pamonce = 6)
+reduced_result$pam = reduced_pam$cluster
+reduced_inter_matr = internal_matric(reduced_result, uncorrelated_DS)
+
+reduced_table = table(reduced_result$class,reduced_result$pam)
+reduced_external  = maximize_diag(reduced_table)
+reduced_precision = precision(reduced_external)
+reduced_recall = recall(reduced_external)
+reduced_f1 = f1(reduced_precision, reduced_recall)
+reduced_evaluate = data.frame(Class = names(reduced_recall), Precision = reduced_precision, Recall = reduced_recall, F1 = reduced_f1)
+
+kable(reduced_inter_matr, caption = "Internal metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(reduced_evaluate, caption = "External metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### iv.
+```{r echo=FALSE, warning = FALSE, message=FALSE, results='asis'}
+# zero_na
+mc_zero_result = data.frame(class = res_frame$class, pam = 0)
+mc_zero_pam = pam(mean_centre_zero, 3, metric = "euclidean", pamonce = 6)
+mc_zero_result$pam = mc_zero_pam$cluster
+mc_zero_inter_matr = internal_matric(mc_zero_result, mean_centre_zero)
+
+mc_zero_table = table(mc_zero_result$class,mc_zero_result$pam)
+mc_zero_external  = maximize_diag(mc_zero_table)
+mc_zero_precision = precision(mc_zero_external)
+mc_zero_recall = recall(mc_zero_external)
+mc_zero_f1 = f1(mc_zero_precision, mc_zero_recall)
+mc_zero_evaluate = data.frame(Class = names(mc_zero_recall), Precision = mc_zero_precision, Recall = mc_zero_recall, F1 = mc_zero_f1)
+
+kable(mc_zero_inter_matr, caption = "Internal criterias for mean_centre_zero data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(mc_zero_evaluate, caption = "External criterias for mean_centre_zero data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r echo=FALSE, message=FALSE, results='asis'}
+# mean_centre_mean
+mc_mean_result = data.frame(class = res_frame$class, pam = 0)
+mc_mean_pam = pam(mean_centre_mean, 3, metric = "euclidean", pamonce = 6)
+mc_mean_result$pam = mc_mean_pam$cluster
+mc_mean_inter_matr = internal_matric(mc_mean_result, mean_centre_mean)
+
+mc_mean_table = table(mc_mean_result$class,mc_mean_result$pam)
+mc_mean_external  = maximize_diag(mc_mean_table)
+mc_mean_precision = precision(mc_mean_external)
+mc_mean_recall = recall(mc_mean_external)
+mc_mean_f1 = f1(mc_mean_precision, mc_mean_recall)
+mc_mean_evaluate = data.frame(Class = names(mc_mean_recall), Precision = mc_mean_precision, Recall = mc_mean_recall, F1 = mc_mean_f1)
+
+kable(mc_mean_inter_matr, caption = "Internal metrics for mean_centre_mean data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(mc_mean_evaluate, caption = "External metrics for mean_centre_mean data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r echo=FALSE, message=FALSE, results='asis'}
+# mean_centre_mean
+mc_median_result = data.frame(class = res_frame$class, pam = 0)
+mc_median_pam = pam(mean_centre_median, 3, metric = "euclidean", pamonce = 6)
+mc_median_result$pam = mc_median_pam$cluster
+mc_median_inter_matr = internal_matric(mc_median_result, mean_centre_median)
+
+mc_median_table = table(mc_median_result$class,mc_median_result$pam)
+mc_median_external  = maximize_diag(mc_median_table)
+mc_median_precision = precision(mc_median_external)
+mc_median_recall = recall(mc_median_external)
+mc_median_f1 = f1(mc_median_precision, mc_median_recall)
+mc_median_evaluate = data.frame(Class = names(mc_median_recall), Precision = mc_median_precision, Recall = mc_median_recall, F1 = mc_median_f1)
+
+kable(mc_median_inter_matr, caption = "Internal metrics for mean_centre_median data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(mc_median_evaluate, caption = "External metrics for mean_centre_median data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### v.
+Among all the data set, the transformed PCA performed the best.
+
+The three mean-centred datasets almost have the same internal metrics and external metrics.The recall for GALAXY class is quite high with the value of _0.97_. At the same time it has 0.73 in precision. However they're all not strong in predicting QSA and STAR. From the low recall we can tell that few of the data are predicted as STAR class, but most of them are correct. In terms of QSA, fewer data has been predicted as this class, and conclusively most of them are incorrect. 
+
+The dataset after deletion of instances and attributes performs similar as three mean-centred datasets.
+
+PCA and reduced PCA with 12 PCs works very well if we only value the external metrics. They have very similar values with all the criteria above 0.8 apart from the recall for _STAR_ class, which is still relatively high compares to the value other datasets produced. The internal metrics have lower dunn value which indicates that the clusters are not well seperated and compact.
+
+# CLASSIFICATION
+```{r eval=FALSE, echo=FALSE}
+rpca12_with_class = data.frame(rpca_12)
+rpca12_with_class$CLASS = res_frame$class
+write.csv(rpca12_with_class, file = "rpca_12.csv")
+```
+```{r eval=FALSE, echo = FALSE}
+tpca_with_class = data.frame(tpca)
+tpca_with_class$CLASS = res_frame$class
+write.csv(tpca_with_class, file = "tpca.csv")
+```
+```{r eval=FALSE, echo = FALSE}
+uncorrelated_DS$CLASS = res_frame$class
+write.csv(uncorrelated_DS, file = "reduced.csv")
+```
+```{r eval=FALSE, echo = FALSE}
+normalised_zero$class = res_frame$class
+normalised_mean$class = res_frame$class
+normalised_median$class = res_frame$class
+write.csv(normalised_zero, file = "normalised_zero.csv")
+write.csv(normalised_mean, file = "normalised_mean.csv")
+write.csv(normalised_median, file = "normalised_median.csv")
+```
+
+## 1.
+```{r eval=FALSE, echo = FALSE, results='asis'}
+#IBK
+confusion_matrix_1 = matrix(c(5019,53,1,1,766,3,7,31,4171), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_1 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.989,0.995,0.991), Recall = c(0.998, 0.901,0.999), F_Measure = c(0.994,0.946,0.995))
+kable(confusion_matrix_1, caption = "The confusion matrix for IBK with k = 5 ", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_1, caption = "The external matrix for IBK with k = 5", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r echo = FALSE, results='asis'}
+# 
+confusion_matrix_2 = matrix(c(5026,0,1,1,849,0,0,1,4174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_2 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(1.000,0.999,1.000), Recall = c(1.000, 0.999,1.000), F_Measure = c(1.000,0.999,1.000))
+kable(confusion_matrix_2, caption = "The confusion matrix for J48", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_2, caption = "The external metrics for J48", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r eval=FALSE, echo = FALSE, results='asis'}
+#NavieBayes
+confusion_matrix_3 = matrix(c(4949,54,15,0,767,2,78,29,4158), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_3 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.986,0.997,0.975), Recall = c(0.984, 0.902,0.996), F_Measure = c(0.985,0.947,0.985))
+kable(confusion_matrix_3, caption = "The confusion matrix for NaiveBayes", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_3, caption = "The external metrics for NaiveBayes", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r echo = FALSE, results='asis'}
+#OneR
+confusion_matrix_4 = matrix(c(5025,0,1,1,849,0,1,1,4174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_4 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(1.000,0.999,1.000), Recall = c(1.000, 0.999,1.000), F_Measure = c(1.000, 0.999,1.000))
+kable(confusion_matrix_4, caption = "The confusion matrix for OneR", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_4, caption = "The external metrics for OneR", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r eval=FALSE, echo = FALSE, results='asis'}
+#ZeroR
+confusion_matrix_5 = matrix(c(5027,850,4175,0,0,0,0,0,0), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_5 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.500,"?","?"), Recall = c(1.000, 0.000,0.000), F_Measure = c(0.667, "?","?"))
+kable(confusion_matrix_5, caption = "The confusion matrix for ZeroR", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_5, caption = "The external metrics for ZeroR", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+I used reduced PCA with 12 PCs in the classification part. Because it works quite well with pam clustering algorithm. I used the  10 fold cross validation runs 10 times with different training and test data which makes use of all data - this prevents the problem of overfitting. The J48 (C4.5) and OneR are the algorithm produces the best results as. They have consistently perfect values for precision recall and F1, of 1 (with only one incorrect prediction with each class) which again suggests that they are the best approach.
+
+## 2.
+```{r echo = FALSE, results='asis'}
+k = c(5,3,5,3,5,3,5,3)
+Search_Algorithm = c("LinearNNSearch", "LinearNNSearch", "KDTree", "KDTree", "LinearNNSearch", "LinearNNSearch", "KDTree", "KDTree")
+Percentage_split = c(0.66, 0.66, 0.66, 0.66, 0.80, 0.80, 0.80, 0.80)
+
+Parameters_table = data.frame(Groups = seq(1,8,1), K = k, Search_Algorithm = Search_Algorithm, Percentage_split = Percentage_split)
+
+kable(Parameters_table, caption = "Different parameters for KNN", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r eval=FALSE, echo = FALSE, results='asis'}
+#Group1
+confusion_matrix_G1 = matrix(c(1635,54,225,3,217,4,85,21,1174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G1 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.854,0.969,0.917), Recall = c(0.949, 0.743,0.837), F_Measure = c(0.899, 0.841,0.875))
+
+kable(confusion_matrix_G1, caption = "The confusion matrix for Group1", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(accuracy_table_G1, caption = "The external metrics for Group1", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r eval=FALSE, echo = FALSE, results='asis'}
+#Group2
+confusion_matrix_G2 = matrix(c(1604,49,216,7,223,8,112,20,1179), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G2 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.858,0.937,0.899), Recall = c(0.931, 0.764,0.840), F_Measure = c(0.893, 0.842,0.869))
+
+kable(confusion_matrix_G2, caption = "The confusion matrix for Group2", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G2, caption = "The external metrics for Group2", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+```
+
+```{r eval=FALSE, echo = FALSE, results='asis'}
+#Group3
+confusion_matrix_G3 = matrix(c(1635,54,225,3,217,4,85,21,1174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G3 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.854,0.969,0.917), Recall = c(0.949, 0.743,0.837), F_Measure = c(0.899, 0.841,0.875))
+kable(confusion_matrix_G3, caption = "The confusion matrix for Group3", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G3, caption = "The external metrics for Group3", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r eval=FALSE, echo = FALSE, results='asis'}
+#Group4
+confusion_matrix_G4 = matrix(c(1604,49,216,7,223,8,112,20,1179), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G4 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.858,0.937,0.899), Recall = c(0.931, 0.764,0.840), F_Measure = c(0.893, 0.842,0.869))
+kable(confusion_matrix_G4, caption = "The confusion matrix for Group4", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G4, caption = "The external metrics for Group4", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r echo = FALSE, results='asis'}
+#Group5
+confusion_matrix_G5 = matrix(c(960,22,130,3,131,2,55,16,691), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G5 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.863,0.963,0.907), Recall = c(0.943, 0.775,0.840), F_Measure = c(0.901, 0.859,0.872))
+kable(confusion_matrix_G5, caption = "The confusion matrix for Group5", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G5, caption = "The external metrics for Group5", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r eval=FALSE, echo = FALSE, results='asis'}
+#Group6
+confusion_matrix_G6 = matrix(c(949,25,130,5,131,2,64,13,691), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G6 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.860,0.949,0.900), Recall = c(0.932, 0.775,0.840), F_Measure = c(0.894, 0.853,0.869))
+kable(confusion_matrix_G6, caption = "The confusion matrix for Group6", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G6, caption = "The external metrics for Group6", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r echo = FALSE, results='asis'}
+#Group7
+confusion_matrix_G7 = matrix(c(960,22,130,3,131,2,55,16,691), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G7 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.863,0.963,0.907), Recall = c(0.943, 0.775,0.840), F_Measure = c(0.901, 0.859,0.872))
+kable(confusion_matrix_G7, caption = "The confusion matrix for Group7", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G7, caption = "The external metrics for Group7", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r eval=FALSE, echo = FALSE, results='asis'}
+#Group8
+confusion_matrix_G8 = matrix(c(949,25,130,5,131,2,64,13,691), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G8 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.860,0.949,0.900), Recall = c(0.932, 0.775,0.840), F_Measure = c(0.894, 0.853,0.869))
+kable(confusion_matrix_G8, caption = "The confusion matrix for Group8", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G8, caption = "The external metrics for Group8", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+The parameters altered are K to values of 5 and 3, Algorithm to LinearNNsearch and KDtree and the percentage split as 0.66 and 0.88, the varying combinations are evident in the table above. Conclusively the search algorithm only slightly affects the output of the results. Increasing the k values and percentage split improves the results. Therefore, Group 7 and 5 prove to be an optimal combination of parameters. 
+
+## 3.
+```{r eval = FALSE, echo = FALSE, results='asis'}
+#tpca
+confusion_matrix_tpca = matrix(c(4790,60,195,35,767,12,202,23,3968), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_tpca = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.949,0.942,0.946), Recall = c(0.953, 0.902,0.950), F_Measure = c(0.951, 0.922,0.948))
+kable(confusion_matrix_tpca, caption = "The confusion matrix for tpca", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_tpca, caption = "The external metrics for tpca", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r echo = FALSE, results='asis'}
+#rpca_12
+confusion_matrix_rpca12= matrix(c(5026,0,1,1,849,0,0,1,4174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_rpca12 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(1.000,0.999,1.000), Recall = c(1.000, 0.999,1.000), F_Measure = c(1.000, 0.999,1.000))
+kable(confusion_matrix_rpca12, caption = "The confusion matrix for rpca12", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_rpca12, caption = "The external metrics for rpca12", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r eval = FALSE, echo = FALSE, results='asis'}
+#reduced
+confusion_matrix_reduced = matrix(c(5006,17,5,10,832,0,11,1,4170), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_reduced = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.996,0.988,0.997), Recall = c(0.996, 0.979,0.999), F_Measure = c(0.996, 0.983,0.998))
+kable(confusion_matrix_reduced, caption = "The confusion matrix for reduced", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_reduced, caption = "The external metrics for reduced", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r eval = FALSE, echo = FALSE, results='asis'}
+#nomalised data set whose missing value has been replaced by zero
+confusion_matrix_n_zero = matrix(c(4954,62,4,42,787,0,31,1,4171), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_n_zero = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.987,0.949,0.992), Recall = c(0.985, 0.926,0.999), F_Measure = c(0.986, 0.937,0.996))
+kable(confusion_matrix_n_zero, caption = "The confusion matrix for normalized_zero", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_n_zero, caption = "The external metrics for normalized_zero", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r eval = FALSE, echo = FALSE, results='asis'}
+#nomalised data set whose missing value has been replaced by mean
+confusion_matrix_n_mean = matrix(c(5004,18,5,12,831,0,11,1,4171), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_n_mean = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.995,0.986,0.997), Recall = c(0.995, 0.978,0.999), F_Measure = c(0.995, 0.982,0.998))
+kable(confusion_matrix_n_mean, caption = "The confusion matrix for normalized_mean", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_n_mean, caption = "The external metrics for normalized_mean", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r eval = FALSE, echo = FALSE, results='asis'}
+#nomalised data set whose missing value has been replaced by median
+confusion_matrix_n_median = matrix(c(4981,38,4,17,811,0,29,1,4171), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_n_median = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.992,0.979,0.993), Recall = c(0.991, 0.954,0.999), F_Measure = c(0.991, 0.967,0.996))
+kable(confusion_matrix_n_median, caption = "The confusion matrix for normalized_median", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_n_median, caption = "The external metrics for normalized_median", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### v.
+The reduced PCA with 12 PCA's has a good impact on the predictive ability of the algorithm. Both Galaxy and Star score a perfect 1 on precicision, recall and f measure. QSO consistently scores 0.99 on all these 3 areas, proving overall a near perfect result. 
+
+# APPENDIX
+
+```{r}
+library(dplyr) 
+library(kableExtra) 
+library(knitr) 
+library(cluster.datasets) 
+library(cluster) 
+library(e1071) 
+library(fpc)
+library(clv) 
+library(gridExtra) 
+library(ggplot2)
+library(ggrepel)
+```
+```{r eval = FALSE}
+res = read.csv("cw_data.csv", header = TRUE, stringsAsFactors = FALSE)
+str(res)
+head(res, 10)
+```
+
+## ANALYSIS AND PRE-PROCESSING
+
+### 1.
+
+#### i.
+
+```{r}
+nominal = c("objid", "rerun", "run", "native", "field", "specobjid", "plate", "fiberid")
+interval = c("mjd")
+ratio = c("dia", "ra", "dec", "u", "g", "r", "i", "z", "m_unt", "flux", "redshift")
+ordinal = c("camcol")
+
+res_nominal = select(res, nominal)
+res_interval = select(res, interval)
+res_ratio = select(res, ratio)
+res_ordinal = select(res, ordinal)
+
+Mode = function(x){
+    ta = table(x)
+    tam = max(ta)
+    if (all(ta == tam))
+          mod = NA
+    else
+        if(is.numeric(x))
+            mod = as.numeric(names(ta)[ta == tam])
+    else
+        mod = names(ta)[ta == tam]
+    return(mod)
+}
+
+mode = function(data){
+  freq_table = table(data) # get the frequency table
+  maximum = freq_table[which.max(freq_table)] # find which one is the most
+  result = row.names(as.data.frame(maximum)) # coerce the data type of maxi to dataframe and then get the row name which is the result we want
+  return(result)
+}
+
+attri = data.frame(Features = colnames(res))
+mode = data.frame(Mode = sapply(cbind(res_nominal, res_ratio), mode))
+missing = data.frame(Missing = sapply(res, function(x)
+  {
+      sum(is.na(x))
+  }))
+mean = data.frame(Mean = sapply(cbind(res_interval, res_ratio), mean, na.rm = TRUE))
+median = data.frame(Median = sapply(cbind(res_ordinal, res_ratio), median, na.rm = TRUE))
+sd = data.frame(SD = sapply(cbind(res_interval, res_ratio), sd, na.rm = TRUE))
+iqr = data.frame(IQR = sapply(cbind(res_interval, res_ratio), IQR, na.rm = TRUE))
+range = data.frame(Range = sapply(cbind(res_interval, res_ratio), function(x){
+  max(x, na.rm = TRUE)-min(x, na.rm = TRUE)
+}))
+
+mode = bind_rows(mode, data.frame(Mode = rep(NA, length(interval)+length(ordinal)), row.names = c(interval, ordinal)))
+mean = bind_rows(mean, data.frame(Mean = rep(NA, length(nominal)+length(ordinal)), row.names = c(nominal, ordinal)))
+median = bind_rows(median, data.frame(Median = rep(NA, length(nominal)+length(interval)), row.names = c(nominal, interval)))
+sd = bind_rows(sd, data.frame(SD = rep(NA, length(nominal)+length(ordinal)), row.names = c(nominal, ordinal)))
+iqr = bind_rows(iqr, data.frame(IQR = rep(NA, length(nominal)+length(ordinal)), row.names = c(nominal, ordinal)))
+range = bind_rows(range, data.frame(Range = rep(NA, length(nominal)+length(ordinal)), row.names = c(nominal, ordinal)))
+
+mode$Features = rownames(mode)
+mean$Features = rownames(mean)
+median$Features = rownames(median)
+sd$Features = rownames(sd)
+iqr$Features = rownames(iqr)
+range$Features = rownames(range)
+missing$Features = rownames(missing)
+
+DT = mode %>% merge(mean) %>% merge(median) %>% merge(sd) %>% merge(iqr) %>% merge(range) %>% merge(missing)
+kable(DT, caption = "centrality measure, dispersion measure and missing value of the dataset", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+#### ii
+
+```{r fig.cap ="Bar chart of Class"}
+class_data = res[,"class"]
+class_percentages = aggregate(class_data, by = list(class_data),FUN = function(x){
+  round(length(x) * 100/length(class_data),2)
+})
+class_count = aggregate(class_data, by = list(class_data), length)
+colnames(class_percentages) = c("Class", "Percentages")
+colnames(class_count) = c("Class", "Count")
+class_agg = merge(class_percentages, class_count)
+ggplot(class_agg, aes(x = Class, y = Percentages, fill = Class, color = Class))+
+  geom_bar(stat = "identity", alpha = .6)+
+  scale_y_continuous(name = "Percentages%")+
+  geom_text_repel(aes(label = Count), force = 3)
+```
+
+  There are three different classes in this data set. The graph shows that _GALAXY_ has the most sample with 5027 in total, which takes up half of the data set. _STAR_ has the second most sample with 4175 samples taking up 41.53%. Lastly _QSO_ has the least sample taking up only 8.47% with 850 samples. Therefore, this data set is not balanced. It may be biased if  accuracy is used to evaluate the training model.
+
+#### iii.
+
+```{r}
+res_frame = data.frame(res)
+```
+
+```{r fig.cap ="dispersion of dec"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = dec, fill = class, color = class), binwidth = .5, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$dec, na.rm = TRUE), max(res_frame$dec,na.rm = TRUE),2))+
+  theme(axis.text.x = element_text(angle = 75, hjust = 1)) +
+  geom_vline(aes(xintercept = median(dec, na.rm=T)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(dec, na.rm=T)),size=1, color="black")
+```
+
+```{r fig.cap ="dispersion of dia"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = dia, fill = class, color = class), binwidth = 17000, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$dia, na.rm = TRUE), max(res_frame$dia,na.rm = TRUE),30000))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(dia, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(dia, na.rm=TRUE)),size=1, color="black")
+```
+
+```{r fig.cap ="dispersion of camcol"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = camcol, fill = class, color = class), binwidth = .5, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$camcol, na.rm = TRUE), max(res_frame$camcol,na.rm = TRUE),1))+
+  geom_vline(aes(xintercept = median(camcol, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(camcol, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of fiberid"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = fiberid, color = class, fill = class), binwidth = 10, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$fiberid, na.rm = TRUE), max(res_frame$fiberid,na.rm = TRUE),20))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(fiberid, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(fiberid, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of field"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = field, color = class, fill = class), binwidth = 10, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$field, na.rm = TRUE), max(res_frame$field, na.rm = TRUE),20))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(field, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(field, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of flux"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = flux, color = class, fill = class), binwidth = 5, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$flux, na.rm = TRUE), max(res_frame$flux, na.rm = TRUE),10))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(flux, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(flux, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of g"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = g, color = class, fill = class), binwidth = .1, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$g, na.rm = TRUE), max(res_frame$g,na.rm = TRUE),0.2))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(g, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(g, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of i"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = i, color = class, fill = class), binwidth = .1, alpha = .6)+
+  scale_x_continuous(breaks = seq(min(res_frame$i, na.rm = TRUE), max(res_frame$i,na.rm = TRUE),0.5))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(i, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(i, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap = "dispersion of m-unt"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = m_unt, color = class, fill = class), binwidth = .000005, alpha = .6)+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(m_unt, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(m_unt, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of mjd"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = mjd, color = class, fill = class), binwidth = 50, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$mjd, na.rm = TRUE), max(res_frame$mjd,na.rm = TRUE),100))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(mjd, na.rm=TRUE)),size=1, color="yellow")+
+  geom_vline(aes(xintercept = mean(mjd, na.rm=TRUE)),size=1, color="black")
+```
+```{r fig.cap ="dispersion of native"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = native, color = class, fill = class), binwidth = .01, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$native, na.rm = TRUE), max(res_frame$native,na.rm = TRUE),.5))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(native, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(native, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of objid"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = objid, color = class, fill = class), binwidth = 1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$objid, na.rm = TRUE), max(res_frame$objid,na.rm = TRUE),1))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(objid, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(objid, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of plate"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = plate, color = class, fill = class), binwidth = 100, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$plate, na.rm = TRUE), max(res_frame$plate,na.rm = TRUE),200))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(plate, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(plate, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of r"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = r, color = class, fill = class), binwidth = .1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$r, na.rm = TRUE), max(res_frame$r,na.rm = TRUE),0.25))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(r, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(r, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of ra"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = ra, color = class, fill = class), binwidth = 2, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$ra, na.rm = TRUE), max(res_frame$ra,na.rm = TRUE),5))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(ra, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(ra, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of redshift"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = redshift, color = class, fill = class), binwidth = .1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$redshift, na.rm = TRUE), max(res_frame$redshift,na.rm = TRUE),.1))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(redshift, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(redshift, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of rerun"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = rerun, color = class, fill = class), binwidth = 1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$rerun, na.rm = TRUE), max(res_frame$rerun,na.rm = TRUE),1))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(rerun, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(rerun, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of run"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = run, color = class, fill = class), binwidth = 10, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$run, na.rm = TRUE), max(res_frame$run,na.rm = TRUE),20))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(run, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(run, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of specobjid"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = specobjid, color = class, fill = class), binwidth = 50000, alpha = .6)+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(specobjid, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(specobjid, na.rm=TRUE)),size=.5, color="black")
+```
+```{r fig.cap ="dispersion of u"}
+ggplot(res_frame)+
+  geom_histogram(aes(x = u, color = class, fill = class), binwidth = .1, alpha = .6)+
+    scale_x_continuous(breaks = seq(min(res_frame$u, na.rm = TRUE), max(res_frame$u,na.rm = TRUE),.5))+
+  theme(text = element_text(size = 10),axis.text.x = element_text(angle = 90, hjust = 1, )) +
+  geom_vline(aes(xintercept = median(u, na.rm=TRUE)),size=.5, color="yellow")+
+  geom_vline(aes(xintercept = mean(u, na.rm=TRUE)),size=.5, color="black")
+```
+
+### 2.
+
+#### i.
+
+```{r fig.cap ="correlation between r and g"}
+correlation = cor(res_frame$r, res_frame$g, method ="pearson", use = "pairwise.complete.obs")
+
+ggplot(res_frame, aes(x = r, y = g))+
+  geom_point(aes(color = class), size = 1)
+```
+
+#### ii.
+
+```{r fig.cap ="correlation between r and mjd"}
+correlation = cor(res_frame$r, res_frame$mjd, method ="pearson", use = "pairwise.complete.obs")
+
+ggplot(res_frame, aes(x = r, y = mjd))+
+  geom_point(aes(color = class), size = 1)
+```
+
+#### iii.
+
+```{r fig.cap ="scatterplot between class and z"}
+ggplot(res_frame, aes(x = class, y = z))+
+  geom_point(aes(color = class), size = 1)
+```
+```{r fig.cap ="scatterplot between class and u"}
+ggplot(res_frame, aes(x = class, y = u))+
+  geom_point(aes(color = class), size = 1)
+```
+```{r fig.cap ="scatterplot between class and redshift"}
+ggplot(res_frame, aes(x = class, y = redshift))+
+  geom_point(aes(color = class), size = 1)
+```
+
+#### iv.
+
+```{r fig.cap="Boxplots of redshift from different classes"}
+ggplot(res_frame, aes(x = class, y = redshift, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of mjd from different classes"}
+ggplot(res_frame, aes(x = class, y = mjd, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of dia from different classes"}
+ggplot(res_frame, aes(x = class, y = dia, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of ra from different classes"}
+ggplot(res_frame, aes(x = class, y = ra, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of dec from different classes"}
+ggplot(res_frame, aes(x = class, y = dec, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of u from different classes"}
+ggplot(res_frame, aes(x = class, y = u, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of g from different classes"}
+ggplot(res_frame, aes(x = class, y = g, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of r from different classes"}
+ggplot(res_frame, aes(x = class, y = r, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of i from different classes"}
+ggplot(res_frame, aes(x = class, y = i, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of z from different classes"}
+ggplot(res_frame, aes(x = class, y = z, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of m-unt from different classes"}
+ggplot(res_frame, aes(x = class, y = m_unt, color = class)) +
+    geom_boxplot()
+```
+```{r fig.cap="Boxplots of flux from different classes"}
+ggplot(res_frame, aes(x = class, y = flux, color = class)) +
+    geom_boxplot()
+```
+
+### 4.
+
+```{r}
+galaxy = select(filter(res_frame, class == "GALAXY"), -"class")
+star = select(filter(res_frame, class == "STAR"), -"class")
+qso = select(filter(res_frame, class == "QSO"), -"class")
+
+galaxy_mean = sapply(galaxy, mean, na.rm = TRUE)
+galaxy_median = sapply(galaxy, median, na.rm = TRUE)
+star_mean = sapply(star, mean, na.rm = TRUE)
+star_median = sapply(star, median, na.rm = TRUE)
+qso_mean = sapply(qso, mean, na.rm = TRUE)
+qso_median = sapply(qso, median, na.rm = TRUE)
+
+zero_na = res_frame
+mean_na = res_frame
+median_na = res_frame
+
+for (i in colnames(zero_na))
+  {
+  zero_na[is.na(zero_na[,i]),i]=0
+  }
+
+for (i in colnames(zero_na))
+  {
+    mean_na[is.na(mean_na[,i]) & mean_na$class == "GALAXY",i] = galaxy_mean[i]
+    median_na[is.na(median_na[,i]) & median_na$class == "GALAXY",i] = galaxy_median[i]
+  }
+  for (i in colnames(zero_na))
+  {
+    mean_na[is.na(mean_na[,i]) & mean_na$class == "QSO",i] = qso_mean[i]
+    median_na[is.na(median_na[,i]) & median_na$class == "QSO",i] = qso_median[i]
+  }
+  for (i in colnames(zero_na))
+  {
+    mean_na[is.na(mean_na[,i]) & mean_na$class == "STAR",i] = star_mean[i]
+    median_na[is.na(median_na[,i]) & median_na$class == "STAR",i] = star_median[i]
+  }
+```
+```{r fig.cap="Boxplots of original dataset"}
+boxplot(select(res_frame, -class))
+```
+```{r fig.cap="Boxplots of the data set replaced by zero value"}
+boxplot(select(zero_na, -class))
+```
+```{r fig.cap="Boxplots of the data set replaced by mean value"}
+boxplot(select(mean_na, -class))
+```
+```{r fig.cap="Boxplots of the data set replaced by median value"}
+boxplot(select(median_na, -class))
+```
+
+### 5.
+
+```{r}
+normalize = function(x) {
+return ((x - min(x)) / (max(x) - min(x)))
+}
+
+mean_centre_zero = data.frame(scale(select(zero_na, -"class"), scale = FALSE))
+mean_centre_mean = data.frame(scale(select(mean_na, -"class"), scale = FALSE))
+mean_centre_median = data.frame(scale(select(median_na, -"class"), scale = FALSE))
+
+normalised_zero = data.frame(sapply(select(zero_na, -"class"), normalize))
+normalised_mean = data.frame(sapply(select(mean_na, -"class"), normalize))
+normalised_median = data.frame(sapply(select(median_na, -"class"), normalize))
+
+standarised_zero = data.frame(scale(select(zero_na, -"class")))
+standarised_mean = data.frame(scale(select(mean_na, -"class")))
+standarised_median = data.frame(scale(select(median_na, -"class")))
+```
+
+```{r}
+mjd_mc_z = data.frame(Mjd = mean_centre_zero$mjd, Measure = "mean centre")
+mjd_n_z = data.frame(Mjd = normalised_zero$mjd, Measure = "normalised")
+mjd_s_z = data.frame(Mjd = standarised_zero$mjd, Measure = "standarised")
+mjd_zero = bind_rows(mjd_mc_z,mjd_n_z,mjd_s_z)
+
+mjd_mc_mean = data.frame(Mjd = mean_centre_mean$mjd, Measure = "mean centre")
+mjd_n_mean = data.frame(Mjd = normalised_mean$mjd, Measure = "normalised")
+mjd_s_mean = data.frame(Mjd = standarised_mean$mjd, Measure = "standarised")
+mjd_mean = bind_rows(mjd_mc_mean,mjd_n_mean,mjd_s_mean)
+
+mjd_mc_median = data.frame(Mjd = mean_centre_median$mjd, Measure = "mean centre")
+mjd_n_median = data.frame(Mjd = normalised_median$mjd, Measure = "normalised")
+mjd_s_median = data.frame(Mjd = standarised_median$mjd, Measure = "standarised")
+mjd_median = bind_rows(mjd_mc_median,mjd_n_median,mjd_s_median)
+```
+
+```{r fig.cap="Boxplots of mjd attribute in data set replaced by zero"}
+ggplot(mjd_zero, color = Measure)+
+  geom_boxplot(aes(y = Mjd, x = Measure ))
+```
+```{r fig.cap="Boxplots of mjd attribute in data set replaced by mean value"}
+ggplot(mjd_mean, color = Measure)+
+  geom_boxplot(aes(y = Mjd, x = Measure ))
+```
+```{r fig.cap="Boxplots of mjd attribute in data set replaced by median value"}
+ggplot(mjd_median, color = Measure)+
+  geom_boxplot(aes(y = Mjd, x = Measure ))
+```
+
+### 6.
+
+#### i.
+
+```{r}
+res_noclass = select(res_frame, -class)
+missing_percentages = data.frame(Features = colnames(res_noclass) , Percentages = sapply(res_noclass, function(x){
+  sum(is.na(x)) * 100/length(x)
+}))
+rownames(missing_percentages) = c()
+index = apply(res_noclass, 1, function(x){
+   sum(is.na(x))/length(x)<0.5
+})
+
+deleting_rows = res_frame[index,]
+
+DF1 = select(deleting_rows, -dia)
+
+kable(missing_percentages, caption = "The percentages of different attribute's missing value", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+#### ii.
+
+```{r}
+replace_missing = function(x){
+  galaxy = select(filter(x, class == "GALAXY"), -"class")
+  star = select(filter(x, class == "STAR"), -"class")
+  qso = select(filter(x, class == "QSO"), -"class")
+
+  galaxy_mean = sapply(galaxy, mean, na.rm = TRUE)
+  star_mean = sapply(star, mean, na.rm = TRUE)
+  qso_mean = sapply(qso, mean, na.rm = TRUE)
+
+  replace_mean = x
+
+  for (i in colnames(replace_mean))
+    {
+      replace_mean[is.na(replace_mean[,i]) & replace_mean$class == "GALAXY",i] = galaxy_mean[i]
+    }
+    for (i in colnames(replace_mean))
+    {
+      replace_mean[is.na(replace_mean[,i]) & replace_mean$class == "QSO",i] = qso_mean[i]
+    }
+    for (i in colnames(replace_mean))
+    {
+      replace_mean[is.na(replace_mean[,i]) & replace_mean$class == "STAR",i] = star_mean[i]
+    }
+  return(replace_mean)
+}
+
+replace_mean = replace_missing(res_frame)
+#sapply(select(replace_mean, -class), function(x){sum(is.na(x))})
+
+#data.frame(cor(select(replace_mean, -class), method = "pearson", use = "pairwise.complete.obs"))
+```
+```{r}
+uncorrelated_DS = select(replace_mean, -class)
+uncorrelated_DS = select(uncorrelated_DS, c(-objid, -rerun, -g, -r, -i, -z, -ra, -specobjid, -plate, -field, -run, -dec, -camcol, -m_unt))
+correlation_mat = cor(uncorrelated_DS, method = "pearson", use = "pairwise.complete.obs")
+kable(correlation_mat, caption = "The correlation matrix of the data set been produced", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### 7.
+
+#### i.
+
+```{r}
+autometic_pca = function(dataset, threshold, outPutData)
+{
+  #normalize the dataset
+  t.stand = scale(dataset)
+  pca_t = prcomp(t.stand)
+  sum = summary(pca_t)
+  select =sapply(sum$importance["Cumulative Proportion",], FUN = function(x){
+    if (x<= threshold)
+    {
+      return(TRUE)
+    }
+    else{
+      return(FALSE)
+    }
+  })
+  select[select == FALSE][1] = TRUE
+  if(outPutData){
+      return(pca_t$x[,select])
+  }else{
+      return(sum$importance[,select])
+  }
+}
+```
+
+```{r}
+original = replace_missing(res_frame)
+original_input = select(original, c(-class, -objid, -rerun, - objid, -specobjid, -fiberid))
+tpca = autometic_pca(original_input, 1, TRUE)
+rpca_12 = tpca[,1:12]
+```
+
+```{r}
+summary(tpca)
+summary(rpca_12)
+```
+
+#### ii.
+
+```{r}
+rpca_90 = autometic_pca(original_input, 0.9, TRUE)
+rpca_90_sum = autometic_pca(original_input, 0.9, FALSE)
+kable(rpca_90_sum, caption = "The PCA obtained a cumulative variance of at least 90%", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+## CLUSTERING
+
+### 1.
+
+```{r}
+cresult = data.frame(class = res_frame$class, hca = 0, kmeans = 0, pam = 0)
+k = 3
+maximize_diag = function(matrix) {
+    if (nrow(matrix) != ncol(matrix)) stop("Not diagonal")
+    if(is.null(rownames(matrix))) rownames(matrix) <- 1:nrow(matrix)
+
+    row.max = apply(matrix,1,which.max)
+
+    return(matrix[names(sort(row.max)),])
+}
+```
+
+```{r}
+hc = hclust(dist(rpca_12))
+cresult$hca = cutree(hc,k)
+
+km = kmeans(rpca_12, 3)
+cresult$kmeans = km$cluster
+
+pam = pam(rpca_12, 3)
+cresult$pam = pam$cluster
+```
+
+```{r}
+internal_matric = function(x, dataset)
+{
+  distance = dist(dataset)
+  if(ncol(x)>2)
+    {
+    all_cresult = x[,c(2:ncol(x))]
+    summ=sapply(all_cresult, FUN = function(x){cluster.stats(distance,clustering = x, silhouette = TRUE)})
+    total = as.data.frame(summ[c("average.between","average.within", "dunn"),])
+  }else{
+    all_cresult = x[,2]
+    summ=cluster.stats(distance,clustering = all_cresult, silhouette = TRUE)
+    total = as.data.frame(summ[c("average.between","average.within", "dunn")])
+  }
+  return(total)
+}
+```
+
+```{r}
+inter_matr = internal_matric(cresult, rpca_12)
+
+kable(inter_matr, caption = "Internal metrics for clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+hca_table = table(cresult$class,cresult$hca)
+km_table = table(cresult$class,cresult$kmeans)
+pam_table = table(cresult$class,cresult$pam)
+
+hca_external  = maximize_diag(hca_table)
+km_external  = maximize_diag(km_table)
+pam_external  = maximize_diag(pam_table)
+
+kable(hca_external, caption = "External metrics for HCA clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(km_external, caption = "External metrics for kmeans clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(pam_external, caption = "External metrics for PAM clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r}
+precision = function(x)
+{
+  diag= diag(x)
+  colsums=apply(x, 2, sum)
+  precision = diag / colsums 
+  return(precision)
+}
+recall = function(x){
+  diag= diag(x)
+  rowsums = apply(x, 1, sum)
+  recall = diag / rowsums 
+  return(recall)
+}
+f1 = function(precision, recall)
+{
+  f1 = 2 * precision * recall / (precision + recall)
+  return(f1)
+}
+```
+
+```{r}
+hca_precision = precision(hca_external)
+hca_recall = recall(hca_external)
+hca_f1 = f1(hca_precision, hca_recall)
+
+HCA_evaluate = data.frame(Class = names(hca_recall), Precision = hca_precision, Recall = hca_recall, F1 = hca_f1)
+
+km_precision = precision(km_external)
+km_recall = recall(km_external)
+km_f1 = f1(km_precision, km_recall)
+
+km_evaluate = data.frame(Class = names(km_recall), Precision = km_precision, Recall = km_recall, F1 = km_f1)
+
+pam_precision = precision(pam_external)
+pam_recall = recall(pam_external)
+pam_f1 = f1(pam_precision, pam_recall)
+
+pam_evaluate = data.frame(Class = names(pam_recall), Precision = pam_precision, Recall = pam_recall, F1 = pam_f1)
+```
+
+```{r}
+kable(HCA_evaluate, caption = "External metrics for HCA clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(km_evaluate, caption = "External metrics for Kmeans clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(pam_evaluate, caption = "External metrics for PAM clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### 2.
+
+```{r}
+# HCA
+HCA = data.frame(HCA = c("HCA1","HCA2","HCA3","HCA4"), Distance = c("manhattan", "euclidean","manhattan","euclidean"), Method = c("complete","complete","single","single"))
+cresult_HCA = data.frame(class = res_frame$class, hca1 = 0, hca2 = 0, hca3 = 0, hca4 = 0)
+hca1 = hclust(dist(rpca_12, "manhattan"), "complete")
+hca2 = hclust(dist(rpca_12, "euclidean"), "complete")
+hca3 = hclust(dist(rpca_12, "manhattan"), "single")
+hca4 = hclust(dist(rpca_12, "euclidean"), "single")
+
+cresult_HCA$hca1 = cutree(hca1,k)
+cresult_HCA$hca2 = cutree(hca2,k)
+cresult_HCA$hca3 = cutree(hca3,k)
+cresult_HCA$hca4 = cutree(hca4,k)
+
+HCA_inter_matr = internal_matric(cresult_HCA, rpca_12)
+
+hca1_table = table(cresult_HCA$class,cresult_HCA$hca1)
+hca2_table = table(cresult_HCA$class,cresult_HCA$hca2)
+hca3_table = table(cresult_HCA$class,cresult_HCA$hca3)
+hca4_table = table(cresult_HCA$class,cresult_HCA$hca4)
+
+hca1_external  = maximize_diag(hca1_table)
+hca2_external  = maximize_diag(hca2_table)
+hca3_external  = maximize_diag(hca3_table)
+hca4_external  = maximize_diag(hca4_table)
+
+hca1_precision = precision(hca1_external)
+hca2_precision = precision(hca2_external)
+hca3_precision = precision(hca3_external)
+hca4_precision = precision(hca4_external)
+
+hca1_recall = recall(hca1_external)
+hca2_recall = recall(hca2_external)
+hca3_recall = recall(hca3_external)
+hca4_recall = recall(hca4_external)
+
+hca1_f1 = f1(hca1_precision, hca1_recall)
+hca2_f1 = f1(hca2_precision, hca2_recall)
+hca3_f1 = f1(hca3_precision, hca3_recall)
+hca4_f1 = f1(hca4_precision, hca4_recall)
+
+HCA1_evaluate = data.frame(Class = names(hca1_recall), Precision = hca1_precision, Recall = hca1_recall, F1 = hca1_f1)
+HCA2_evaluate = data.frame(Class = names(hca2_recall), Precision = hca2_precision, Recall = hca2_recall, F1 = hca2_f1)
+HCA3_evaluate = data.frame(Class = names(hca3_recall), Precision = hca3_precision, Recall = hca3_recall, F1 = hca3_f1)
+HCA4_evaluate = data.frame(Class = names(hca4_recall), Precision = hca4_precision, Recall = hca4_recall, F1 = hca4_f1)
+
+kable(HCA, caption = "Combinations of parameters for HCA clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(HCA_inter_matr, caption = "Internal metrics for clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(HCA1_evaluate, caption = "External metrices for HCA1 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(HCA2_evaluate, caption = "External metrices for HCA2 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(HCA3_evaluate, caption = "External metrices for HCA3 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(HCA4_evaluate, caption = "External metrices for HCA4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+# Kmean
+Kmean = data.frame(Kmeans = c("km1","km2","km3","km4"), nstart = c(5, 10, 5, 10), Method = c("Hartigan-Wong","Hartigan-Wong","Lloyd","Lloyd"))
+cresult_Kmeans = data.frame(class = res_frame$class, km1 = 0, km2 = 0, km3 = 0, km4 = 0)
+
+km1 = kmeans(rpca_12, 3, nstart = 5)
+km2 = kmeans(rpca_12, 3, nstart = 10)
+km3 = kmeans(rpca_12, 3, iter.max = 1000, nstart = 5, "Lloyd")
+km4 = kmeans(rpca_12, 3, iter.max = 1000, nstart = 10, "Lloyd")
+
+cresult_Kmeans$km1 = km1$cluster
+cresult_Kmeans$km2 = km2$cluster
+cresult_Kmeans$km3 = km3$cluster
+cresult_Kmeans$km4 = km4$cluster
+
+Kmeans_inter_matr = internal_matric(cresult_Kmeans, rpca_12)
+
+km1_table = table(cresult_Kmeans$class,cresult_Kmeans$km1)
+km2_table = table(cresult_Kmeans$class,cresult_Kmeans$km2)
+km3_table = table(cresult_Kmeans$class,cresult_Kmeans$km3)
+km4_table = table(cresult_Kmeans$class,cresult_Kmeans$km4)
+
+km1_external  = maximize_diag(km1_table)
+km2_external  = maximize_diag(km2_table)
+km3_external  = maximize_diag(km3_table)
+km4_external  = maximize_diag(km4_table)
+
+km1_precision = precision(km1_external)
+km2_precision = precision(km2_external)
+km3_precision = precision(km3_external)
+km4_precision = precision(km4_external)
+
+km1_recall = recall(km1_external)
+km2_recall = recall(km2_external)
+km3_recall = recall(km3_external)
+km4_recall = recall(km4_external)
+
+km1_f1 = f1(km1_precision, km1_recall)
+km2_f1 = f1(km2_precision, km2_recall)
+km3_f1 = f1(km3_precision, km3_recall)
+km4_f1 = f1(km4_precision, km4_recall)
+
+km1_evaluate = data.frame(Class = names(km1_recall), Precision = km1_precision, Recall = km1_recall, F1 = km1_f1)
+km2_evaluate = data.frame(Class = names(km2_recall), Precision = km2_precision, Recall = km2_recall, F1 = km2_f1)
+km3_evaluate = data.frame(Class = names(km3_recall), Precision = km3_precision, Recall = km3_recall, F1 = km3_f1)
+km4_evaluate = data.frame(Class = names(km4_recall), Precision = km4_precision, Recall = km4_recall, F1 = km4_f1)
+
+kable(Kmean, caption = "Combinations of parameters for kmeans clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(Kmeans_inter_matr, caption = "Internal metrics for Kmeans clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(km1_evaluate, caption = "External mectrices for km1 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(km2_evaluate, caption = "External mectrices for km2 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(km3_evaluate, caption = "External mectrices for km3 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(km4_evaluate, caption = "External mectrices for km4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+PAM = data.frame(PAM = c("pam1","pam2","pam3","pam4"), Metric = c("manhattan", "manhattan", "euclidean", "euclidean"), Pamonce = c(3,6,3,6))
+
+cresult_PAM = data.frame(class = res_frame$class, pam1 = 0, pam2 = 0, pam3 = 0, pam4 = 0)
+
+pam1 = pam(rpca_12, 3, metric = "manhattan", pamonce = 3)
+pam2 = pam(rpca_12, 3, metric = "manhattan", pamonce = 6)
+pam3 = pam(rpca_12, 3, metric = "euclidean", pamonce = 3)
+pam4 = pam(rpca_12, 3, metric = "euclidean", pamonce = 6)
+
+cresult_PAM$pam1 = pam1$cluster
+cresult_PAM$pam2 = pam2$cluster
+cresult_PAM$pam3 = pam3$cluster
+cresult_PAM$pam4 = pam4$cluster
+
+PAM_inter_matr = internal_matric(cresult_PAM, rpca_12)
+
+pam1_table = table(cresult_PAM$class,cresult_PAM$pam1)
+pam2_table = table(cresult_PAM$class,cresult_PAM$pam2)
+pam3_table = table(cresult_PAM$class,cresult_PAM$pam3)
+pam4_table = table(cresult_PAM$class,cresult_PAM$pam4)
+
+pam1_external  = maximize_diag(pam1_table)
+pam2_external  = maximize_diag(pam2_table)
+pam3_external  = maximize_diag(pam3_table)
+pam4_external  = maximize_diag(pam4_table)
+
+pam1_precision = precision(pam1_external)
+pam2_precision = precision(pam2_external)
+pam3_precision = precision(pam3_external)
+pam4_precision = precision(pam4_external)
+
+pam1_recall = recall(pam1_external)
+pam2_recall = recall(pam2_external)
+pam3_recall = recall(pam3_external)
+pam4_recall = recall(pam4_external)
+
+pam1_f1 = f1(pam1_precision, pam1_recall)
+pam2_f1 = f1(pam2_precision, pam2_recall)
+pam3_f1 = f1(pam3_precision, pam3_recall)
+pam4_f1 = f1(pam4_precision, pam4_recall)
+
+pam1_evaluate = data.frame(Class = names(pam1_recall), Precision = pam1_precision, Recall = pam1_recall, F1 = pam1_f1)
+pam2_evaluate = data.frame(Class = names(pam2_recall), Precision = pam2_precision, Recall = pam2_recall, F1 = pam2_f1)
+pam3_evaluate = data.frame(Class = names(pam3_recall), Precision = pam3_precision, Recall = pam3_recall, F1 = pam3_f1)
+pam4_evaluate = data.frame(Class = names(pam4_recall), Precision = pam4_precision, Recall = pam4_recall, F1 = pam4_f1)
+
+kable(PAM, caption = "Combinations of parameters for pam clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(PAM_inter_matr, caption = "Internal metrics for PAM clustering result", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(pam1_evaluate, caption = "External mectrices for pam1 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(pam2_evaluate, caption = "External mectrices for pam2 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(pam3_evaluate, caption = "External mectrices for pam3 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(pam4_evaluate, caption = "External mectrices for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### 3.
+
+#### i.
+```{r}
+tpca_result = data.frame(class = res_frame$class, pam = 0)
+tpca_pam = pam(tpca, 3, metric = "euclidean", pamonce = 6)
+tpca_result$pam = tpca_pam$cluster
+tpca_inter_matr = internal_matric(tpca_result, tpca)
+
+tpca_table = table(tpca_result$class,tpca_result$pam)
+tpca_external  = maximize_diag(tpca_table)
+tpca_precision = precision(tpca_external)
+tpca_recall = recall(tpca_external)
+tpca_f1 = f1(tpca_precision, tpca_recall)
+tpca_evaluate = data.frame(Class = names(tpca_recall), Precision = tpca_precision, Recall = tpca_recall, F1 = tpca_f1)
+
+kable(tpca_inter_matr, caption = "Internal metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(tpca_evaluate, caption = "External metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+#### ii.
+```{r}
+rpca12_result = data.frame(class = res_frame$class, pam = 0)
+rpca12_pam = pam(rpca_12, 3, metric = "euclidean", pamonce = 6)
+rpca12_result$pam = rpca12_pam$cluster
+rpca12_inter_matr = internal_matric(rpca12_result, rpca_12)
+
+rpca12_table = table(rpca12_result$class,rpca12_result$pam)
+rpca12_external  = maximize_diag(rpca12_table)
+rpca12_precision = precision(rpca12_external)
+rpca12_recall = recall(rpca12_external)
+rpca12_f1 = f1(rpca12_precision, rpca12_recall)
+rpca12_evaluate = data.frame(Class = names(rpca12_recall), Precision = rpca12_precision, Recall = rpca12_recall, F1 = rpca12_f1)
+
+kable(rpca12_inter_matr, caption = "Internal metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(rpca12_evaluate, caption = "External metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+#### iii.
+```{r}
+reduced_result = data.frame(class = res_frame$class, pam = 0)
+reduced_pam = pam(uncorrelated_DS, 3, metric = "euclidean", pamonce = 6)
+reduced_result$pam = reduced_pam$cluster
+reduced_inter_matr = internal_matric(reduced_result, uncorrelated_DS)
+
+reduced_table = table(reduced_result$class,reduced_result$pam)
+reduced_external  = maximize_diag(reduced_table)
+reduced_precision = precision(reduced_external)
+reduced_recall = recall(reduced_external)
+reduced_f1 = f1(reduced_precision, reduced_recall)
+reduced_evaluate = data.frame(Class = names(reduced_recall), Precision = reduced_precision, Recall = reduced_recall, F1 = reduced_f1)
+
+kable(reduced_inter_matr, caption = "Internal metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(reduced_evaluate, caption = "External metrics for pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+#### iv.
+```{r}
+# zero_na
+mc_zero_result = data.frame(class = res_frame$class, pam = 0)
+mc_zero_pam = pam(mean_centre_zero, 3, metric = "euclidean", pamonce = 6)
+mc_zero_result$pam = mc_zero_pam$cluster
+mc_zero_inter_matr = internal_matric(mc_zero_result, mean_centre_zero)
+
+mc_zero_table = table(mc_zero_result$class,mc_zero_result$pam)
+mc_zero_external  = maximize_diag(mc_zero_table)
+mc_zero_precision = precision(mc_zero_external)
+mc_zero_recall = recall(mc_zero_external)
+mc_zero_f1 = f1(mc_zero_precision, mc_zero_recall)
+mc_zero_evaluate = data.frame(Class = names(mc_zero_recall), Precision = mc_zero_precision, Recall = mc_zero_recall, F1 = mc_zero_f1)
+
+kable(mc_zero_inter_matr, caption = "Internal criterias for mean_centre_zero data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(mc_zero_evaluate, caption = "External criterias for mean_centre_zero data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+# mean_centre_mean
+mc_mean_result = data.frame(class = res_frame$class, pam = 0)
+mc_mean_pam = pam(mean_centre_mean, 3, metric = "euclidean", pamonce = 6)
+mc_mean_result$pam = mc_mean_pam$cluster
+mc_mean_inter_matr = internal_matric(mc_mean_result, mean_centre_mean)
+
+mc_mean_table = table(mc_mean_result$class,mc_mean_result$pam)
+mc_mean_external  = maximize_diag(mc_mean_table)
+mc_mean_precision = precision(mc_mean_external)
+mc_mean_recall = recall(mc_mean_external)
+mc_mean_f1 = f1(mc_mean_precision, mc_mean_recall)
+mc_mean_evaluate = data.frame(Class = names(mc_mean_recall), Precision = mc_mean_precision, Recall = mc_mean_recall, F1 = mc_mean_f1)
+
+kable(mc_mean_inter_matr, caption = "Internal metrics for mean_centre_mean data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(mc_mean_evaluate, caption = "External metrics for mean_centre_mean data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+# mean_centre_mean
+mc_median_result = data.frame(class = res_frame$class, pam = 0)
+mc_median_pam = pam(mean_centre_median, 3, metric = "euclidean", pamonce = 6)
+mc_median_result$pam = mc_median_pam$cluster
+mc_median_inter_matr = internal_matric(mc_median_result, mean_centre_median)
+
+mc_median_table = table(mc_median_result$class,mc_median_result$pam)
+mc_median_external  = maximize_diag(mc_median_table)
+mc_median_precision = precision(mc_median_external)
+mc_median_recall = recall(mc_median_external)
+mc_median_f1 = f1(mc_median_precision, mc_median_recall)
+mc_median_evaluate = data.frame(Class = names(mc_median_recall), Precision = mc_median_precision, Recall = mc_median_recall, F1 = mc_median_f1)
+
+kable(mc_median_inter_matr, caption = "Internal metrics for mean_centre_median data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(mc_median_evaluate, caption = "External metrics for mean_centre_median data set using pam4 clustering method", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+## CLASSIFICATION
+```{r}
+rpca12_with_class = data.frame(rpca_12)
+rpca12_with_class$CLASS = res_frame$class
+write.csv(rpca12_with_class, file = "rpca_12.csv")
+```
+```{r}
+tpca_with_class = data.frame(tpca)
+tpca_with_class$CLASS = res_frame$class
+write.csv(tpca_with_class, file = "tpca.csv")
+```
+```{r}
+uncorrelated_DS$CLASS = res_frame$class
+write.csv(uncorrelated_DS, file = "reduced.csv")
+```
+```{r}
+normalised_zero$class = res_frame$class
+normalised_mean$class = res_frame$class
+normalised_median$class = res_frame$class
+write.csv(normalised_zero, file = "normalised_zero.csv")
+write.csv(normalised_mean, file = "normalised_mean.csv")
+write.csv(normalised_median, file = "normalised_median.csv")
+```
+
+### 1.
+```{r}
+#IBK
+confusion_matrix_1 = matrix(c(5019,53,1,1,766,3,7,31,4171), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_1 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.989,0.995,0.991), Recall = c(0.998, 0.901,0.999), F_Measure = c(0.994,0.946,0.995))
+kable(confusion_matrix_1, caption = "The confusion matrix for IBK with k = 5 ", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_1, caption = "The external matrix for IBK with k = 5", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r}
+# 
+confusion_matrix_2 = matrix(c(5026,0,1,1,849,0,0,1,4174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_2 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(1.000,0.999,1.000), Recall = c(1.000, 0.999,1.000), F_Measure = c(1.000,0.999,1.000))
+kable(confusion_matrix_2, caption = "The confusion matrix for J48", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_2, caption = "The external metrics for J48", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r}
+#NavieBayes
+confusion_matrix_3 = matrix(c(4949,54,15,0,767,2,78,29,4158), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_3 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.986,0.997,0.975), Recall = c(0.984, 0.902,0.996), F_Measure = c(0.985,0.947,0.985))
+kable(confusion_matrix_3, caption = "The confusion matrix for NaiveBayes", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_3, caption = "The external metrics for NaiveBayes", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r}
+#OneR
+confusion_matrix_4 = matrix(c(5025,0,1,1,849,0,1,1,4174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_4 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(1.000,0.999,1.000), Recall = c(1.000, 0.999,1.000), F_Measure = c(1.000, 0.999,1.000))
+kable(confusion_matrix_4, caption = "The confusion matrix for OneR", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_4, caption = "The external metrics for OneR", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+```{r}
+#ZeroR
+confusion_matrix_5 = matrix(c(5027,850,4175,0,0,0,0,0,0), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_5 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.500,"?","?"), Recall = c(1.000, 0.000,0.000), F_Measure = c(0.667, "?","?"))
+kable(confusion_matrix_5, caption = "The confusion matrix for ZeroR", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_5, caption = "The external metrics for ZeroR", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### 2.
+
+```{r}
+k = c(5,3,5,3,5,3,5,3)
+Search_Algorithm = c("LinearNNSearch", "LinearNNSearch", "KDTree", "KDTree", "LinearNNSearch", "LinearNNSearch", "KDTree", "KDTree")
+Percentage_split = c(0.66, 0.66, 0.66, 0.66, 0.80, 0.80, 0.80, 0.80)
+
+Parameters_table = data.frame(Groups = seq(1,8,1), K = k, Search_Algorithm = Search_Algorithm, Percentage_split = Percentage_split)
+
+kable(Parameters_table, caption = "Different parameters for KNN", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+#Group1
+confusion_matrix_G1 = matrix(c(1635,54,225,3,217,4,85,21,1174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G1 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.854,0.969,0.917), Recall = c(0.949, 0.743,0.837), F_Measure = c(0.899, 0.841,0.875))
+
+kable(confusion_matrix_G1, caption = "The confusion matrix for Group1", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+kable(accuracy_table_G1, caption = "The external metrics for Group1", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+#Group2
+confusion_matrix_G2 = matrix(c(1604,49,216,7,223,8,112,20,1179), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G2 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.858,0.937,0.899), Recall = c(0.931, 0.764,0.840), F_Measure = c(0.893, 0.842,0.869))
+
+kable(confusion_matrix_G2, caption = "The confusion matrix for Group2", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G2, caption = "The external metrics for Group2", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+
+```
+
+```{r}
+#Group3
+confusion_matrix_G3 = matrix(c(1635,54,225,3,217,4,85,21,1174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G3 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.854,0.969,0.917), Recall = c(0.949, 0.743,0.837), F_Measure = c(0.899, 0.841,0.875))
+kable(confusion_matrix_G3, caption = "The confusion matrix for Group3", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G3, caption = "The external metrics for Group3", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+#Group4
+confusion_matrix_G4 = matrix(c(1604,49,216,7,223,8,112,20,1179), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G4 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.858,0.937,0.899), Recall = c(0.931, 0.764,0.840), F_Measure = c(0.893, 0.842,0.869))
+kable(confusion_matrix_G4, caption = "The confusion matrix for Group4", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G4, caption = "The external metrics for Group4", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+#Group5
+confusion_matrix_G5 = matrix(c(960,22,130,3,131,2,55,16,691), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G5 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.863,0.963,0.907), Recall = c(0.943, 0.775,0.840), F_Measure = c(0.901, 0.859,0.872))
+kable(confusion_matrix_G5, caption = "The confusion matrix for Group5", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G5, caption = "The external metrics for Group5", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+#Group6
+confusion_matrix_G6 = matrix(c(949,25,130,5,131,2,64,13,691), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G6 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.860,0.949,0.900), Recall = c(0.932, 0.775,0.840), F_Measure = c(0.894, 0.853,0.869))
+kable(confusion_matrix_G6, caption = "The confusion matrix for Group6", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G6, caption = "The external metrics for Group6", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+#Group7
+confusion_matrix_G7 = matrix(c(960,22,130,3,131,2,55,16,691), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G7 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.863,0.963,0.907), Recall = c(0.943, 0.775,0.840), F_Measure = c(0.901, 0.859,0.872))
+kable(confusion_matrix_G7, caption = "The confusion matrix for Group7", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G7, caption = "The external metrics for Group7", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+#Group8
+confusion_matrix_G8 = matrix(c(949,25,130,5,131,2,64,13,691), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_G8 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.860,0.949,0.900), Recall = c(0.932, 0.775,0.840), F_Measure = c(0.894, 0.853,0.869))
+kable(confusion_matrix_G8, caption = "The confusion matrix for Group8", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_G8, caption = "The external metrics for Group8", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+### 3.
+
+#### i.
+
+```{r}
+#tpca
+confusion_matrix_tpca = matrix(c(4790,60,195,35,767,12,202,23,3968), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_tpca = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.949,0.942,0.946), Recall = c(0.953, 0.902,0.950), F_Measure = c(0.951, 0.922,0.948))
+kable(confusion_matrix_tpca, caption = "The confusion matrix for tpca", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_tpca, caption = "The external metrics for tpca", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+#### ii.
+
+```{r}
+#rpca_12
+confusion_matrix_rpca12= matrix(c(5026,0,1,1,849,0,0,1,4174), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_rpca12 = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(1.000,0.999,1.000), Recall = c(1.000, 0.999,1.000), F_Measure = c(1.000, 0.999,1.000))
+kable(confusion_matrix_rpca12, caption = "The confusion matrix for rpca12", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_rpca12, caption = "The external metrics for rpca12", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+#### iii.
+
+```{r}
+#reduced
+confusion_matrix_reduced = matrix(c(5006,17,5,10,832,0,11,1,4170), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_reduced = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.996,0.988,0.997), Recall = c(0.996, 0.979,0.999), F_Measure = c(0.996, 0.983,0.998))
+kable(confusion_matrix_reduced, caption = "The confusion matrix for reduced", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_reduced, caption = "The external metrics for reduced", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+#### iv.
+
+```{r}
+#nomalised data set whose missing value has been replaced by zero
+confusion_matrix_n_zero = matrix(c(4954,62,4,42,787,0,31,1,4171), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_n_zero = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.987,0.949,0.992), Recall = c(0.985, 0.926,0.999), F_Measure = c(0.986, 0.937,0.996))
+kable(confusion_matrix_n_zero, caption = "The confusion matrix for normalized_zero", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_n_zero, caption = "The external metrics for normalized_zero", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+#nomalised data set whose missing value has been replaced by mean
+confusion_matrix_n_mean = matrix(c(5004,18,5,12,831,0,11,1,4171), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_n_mean = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.995,0.986,0.997), Recall = c(0.995, 0.978,0.999), F_Measure = c(0.995, 0.982,0.998))
+kable(confusion_matrix_n_mean, caption = "The confusion matrix for normalized_mean", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_n_mean, caption = "The external metrics for normalized_mean", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
+
+```{r}
+#nomalised data set whose missing value has been replaced by median
+confusion_matrix_n_median = matrix(c(4981,38,4,17,811,0,29,1,4171), nrow = 3, dimnames = list(c("GALAXY", "QSO", "STAR"),c("GALAXY", "QSO", "STAR")))
+accuracy_table_n_median = data.frame(Class = c("GALAXY", "QSO", "STAR"), Precision = c(0.992,0.979,0.993), Recall = c(0.991, 0.954,0.999), F_Measure = c(0.991, 0.967,0.996))
+kable(confusion_matrix_n_median, caption = "The confusion matrix for normalized_median", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+kable(accuracy_table_n_median, caption = "The external metrics for normalized_median", align = "c", digits = 4, "simple") %>% kable_styling(latex_options = c("striped"), font_size=7)
+```
